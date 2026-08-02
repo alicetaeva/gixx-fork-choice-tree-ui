@@ -9,7 +9,47 @@ const DEFAULT_SETTINGS = Object.freeze({
     apiUrl: "",
     apiKey: "",
     apiModel: "",
+    promptPresets: [],   // [{ name: string, text: string }]
+    activePreset: "",    // имя активного пресета ("" = ручной / кастомный текст)
 });
+
+// ---------------------------------------------------------------------
+// Справочник "тонов" ответа. Используется, чтобы у вариантов ВСЕГДА
+// были корректные иконка и название, даже если модель (например,
+// Claude Sonnet 5 через кастомный API) вернула невалидный / незнакомый
+// tone, пустой label, либо буквально "unidentified"/"unknown".
+// ---------------------------------------------------------------------
+const TONE_META = {
+    tender: { icon: "💙", label: "Нежный" },
+    sharp: { icon: "🧊", label: "Резкий" },
+    bold: { icon: "🔥", label: "Дерзкий" },
+    wild: { icon: "🎲", label: "Дикий" },
+};
+const TONE_ORDER = ["tender", "sharp", "bold", "wild"];
+const BAD_LABELS = new Set(["", "unidentified", "unknown", "n/a", "null", "undefined"]);
+
+/**
+ * Приводит "сырой" вариант ответа от модели к безопасному виду:
+ * гарантирует валидный tone/icon/label, никогда не пропускает
+ * "unidentified" и подобный мусор в UI.
+ */
+function normalizeChoice(raw, index) {
+    const c = raw || {};
+
+    let toneKey = String(c.tone || "").toLowerCase().trim();
+    if (!TONE_META[toneKey]) {
+        toneKey = TONE_ORDER[index % TONE_ORDER.length];
+    }
+    const meta = TONE_META[toneKey];
+
+    const rawLabel = String(c.label ?? "").trim();
+    const label = BAD_LABELS.has(rawLabel.toLowerCase()) ? meta.label : rawLabel;
+
+    const rawIcon = String(c.icon ?? "").trim();
+    const icon = rawIcon ? rawIcon : meta.icon;
+
+    return { ...c, tone: toneKey, label, icon };
+}
 
 function getSettings() {
     const { extensionSettings } = SillyTavern.getContext();
@@ -18,7 +58,7 @@ function getSettings() {
     }
     for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) {
         if (!Object.hasOwn(extensionSettings[MODULE_NAME], k)) {
-            extensionSettings[MODULE_NAME][k] = v;
+            extensionSettings[MODULE_NAME][k] = structuredClone(v);
         }
     }
     return extensionSettings[MODULE_NAME];
@@ -75,6 +115,19 @@ function injectSettingsPanel() {
                             Свой промпт для генерации
                             <span style="opacity:0.5;font-size:11px;">(пусто = дефолтный)</span>
                         </label>
+
+                        <div style="display:flex;gap:6px;margin-bottom:6px;">
+                            <select id="ctu-preset-select"
+                                style="flex:1;font-size:11px;background:rgba(255,255,255,0.07);
+                                       border:1px solid rgba(255,255,255,0.15);border-radius:6px;
+                                       padding:6px 8px;color:inherit;box-sizing:border-box;">
+                                <option value="">— свой текст (без пресета) —</option>
+                            </select>
+                            <input type="button" id="ctu-preset-delete"
+                                   class="menu_button" value="🗑" title="Удалить выбранный пресет"
+                                   style="flex:0 0 auto;padding:0 10px;" />
+                        </div>
+
                         <textarea id="ctu-custom-prompt"
                             placeholder="Оставь пустым чтобы использовать встроенный промпт..."
                             style="width:100%;height:80px;resize:vertical;font-size:11px;
@@ -82,6 +135,7 @@ function injectSettingsPanel() {
                                    border-radius:6px;padding:7px;color:inherit;box-sizing:border-box;
                                    font-family:inherit;line-height:1.4;"
                         ></textarea>
+
                         <div style="display:flex;gap:6px;margin-top:5px;">
                             <input type="button" id="ctu-save-prompt"
                                    class="menu_button" style="flex:1;"
@@ -89,6 +143,17 @@ function injectSettingsPanel() {
                             <input type="button" id="ctu-reset-prompt"
                                    class="menu_button" style="flex:1;"
                                    value="Сбросить" />
+                        </div>
+
+                        <div style="display:flex;gap:6px;margin-top:5px;">
+                            <input type="text" id="ctu-preset-name"
+                                   placeholder="Название пресета..."
+                                   style="flex:1;font-size:11px;background:rgba(255,255,255,0.05);
+                                          border:1px solid rgba(255,255,255,0.15);border-radius:6px;
+                                          padding:6px 8px;color:inherit;box-sizing:border-box;" />
+                            <input type="button" id="ctu-preset-save-as"
+                                   class="menu_button" style="flex:0 0 auto;"
+                                   value="💾 Сохранить как пресет" />
                         </div>
                     </div>
 
@@ -205,6 +270,103 @@ function syncUI() {
     if ($("ctu-api-key")) $("ctu-api-key").value = s.apiKey || "";
     if ($("ctu-api-model")) $("ctu-api-model").value = s.apiModel || "";
     updateApiStatusBadge();
+    populatePresetSelect();
+}
+
+// ---------------------------------------------------------------------
+// Пресеты кастомного промпта
+// ---------------------------------------------------------------------
+
+function populatePresetSelect() {
+    const s = getSettings();
+    const select = document.getElementById("ctu-preset-select");
+    if (!select) return;
+
+    select.innerHTML = `<option value="">— свой текст (без пресета) —</option>`;
+    s.promptPresets.forEach((p) => {
+        const opt = document.createElement("option");
+        opt.value = p.name;
+        opt.textContent = p.name;
+        if (p.name === s.activePreset) opt.selected = true;
+        select.appendChild(opt);
+    });
+
+    if (!s.activePreset) select.value = "";
+}
+
+function findPreset(name) {
+    const s = getSettings();
+    return s.promptPresets.find((p) => p.name === name);
+}
+
+function loadPresetIntoEditor(name) {
+    const { saveSettingsDebounced } = SillyTavern.getContext();
+    const s = getSettings();
+    const $ = (id) => document.getElementById(id);
+
+    if (!name) {
+        s.activePreset = "";
+        saveSettingsDebounced();
+        return;
+    }
+
+    const preset = findPreset(name);
+    if (!preset) return;
+
+    s.activePreset = name;
+    s.customPrompt = preset.text;
+    if ($("ctu-custom-prompt")) $("ctu-custom-prompt").value = preset.text;
+    if ($("ctu-preset-name")) $("ctu-preset-name").value = name;
+    saveSettingsDebounced();
+}
+
+function savePresetAs(name, text) {
+    const { saveSettingsDebounced } = SillyTavern.getContext();
+    const s = getSettings();
+
+    const trimmedName = (name || "").trim();
+    if (!trimmedName) {
+        toastr.warning("Введите название пресета");
+        return false;
+    }
+    if (!text || !text.trim()) {
+        toastr.warning("Промпт пуст — нечего сохранять");
+        return false;
+    }
+
+    const existing = findPreset(trimmedName);
+    if (existing) {
+        existing.text = text;
+    } else {
+        s.promptPresets.push({ name: trimmedName, text });
+    }
+
+    s.activePreset = trimmedName;
+    s.customPrompt = text;
+    saveSettingsDebounced();
+    populatePresetSelect();
+    toastr.success(`Пресет "${trimmedName}" сохранён!`);
+    return true;
+}
+
+function deletePreset(name) {
+    const { saveSettingsDebounced } = SillyTavern.getContext();
+    const s = getSettings();
+
+    if (!name) {
+        toastr.info("Сначала выберите пресет из списка");
+        return;
+    }
+
+    const idx = s.promptPresets.findIndex((p) => p.name === name);
+    if (idx === -1) return;
+
+    s.promptPresets.splice(idx, 1);
+    if (s.activePreset === name) s.activePreset = "";
+
+    saveSettingsDebounced();
+    populatePresetSelect();
+    toastr.info(`Пресет "${name}" удалён`);
 }
 
 function updateApiStatusBadge() {
@@ -337,6 +499,8 @@ function bindSettingsEvents() {
         if (v) v.textContent = e.target.value;
         saveSettingsDebounced();
     });
+
+    // Ручное сохранение текста в текущий customPrompt (без создания пресета)
     $("ctu-save-prompt")?.addEventListener("click", () => {
         const val = $("ctu-custom-prompt")?.value?.trim() || "";
         s.customPrompt = (val === DEFAULT_PROMPT_TEMPLATE.trim()) ? "" : val;
@@ -345,10 +509,31 @@ function bindSettingsEvents() {
     });
     $("ctu-reset-prompt")?.addEventListener("click", () => {
         s.customPrompt = "";
+        s.activePreset = "";
         if ($("ctu-custom-prompt")) $("ctu-custom-prompt").value = DEFAULT_PROMPT_TEMPLATE;
+        if ($("ctu-preset-select")) $("ctu-preset-select").value = "";
         saveSettingsDebounced();
         toastr.info("Промпт сброшен к дефолтному");
     });
+
+    // Пресеты
+    $("ctu-preset-select")?.addEventListener("change", (e) => {
+        loadPresetIntoEditor(e.target.value);
+    });
+    $("ctu-preset-save-as")?.addEventListener("click", () => {
+        const name = $("ctu-preset-name")?.value || "";
+        const text = $("ctu-custom-prompt")?.value || "";
+        if (savePresetAs(name, text)) {
+            const select = $("ctu-preset-select");
+            if (select) select.value = name.trim();
+        }
+    });
+    $("ctu-preset-delete")?.addEventListener("click", () => {
+        const name = $("ctu-preset-select")?.value || "";
+        deletePreset(name);
+        if ($("ctu-preset-name")) $("ctu-preset-name").value = "";
+    });
+
     $("ctu-generate-now")?.addEventListener("click", generateChoices);
 
     function autoSaveApi() {
@@ -427,6 +612,8 @@ Match the tone, language and intensity of the current scene exactly.
 - No clichés, no emotional explanations — only action and words
 - Do NOT write for {{char}}
 - Match the writing style you see in the conversation history
+- The "tone" field of every option MUST be exactly one of: tender, sharp, bold, wild (lowercase, no other values)
+- The "label" field MUST be a short human-readable name (never leave it empty, never write "unidentified" or "unknown")
 </rules>
 
 Return ONLY raw JSON, no markdown:
@@ -444,10 +631,10 @@ function buildDefaultPrompt(ctx, count) {
     const charName = ctx.name2 || "Character";
 
     const archetypes = [
-        { id: 1, tone: "Tender", icon: "💙", label: "Нежный" },
-        { id: 2, tone: "Sharp",  icon: "🧊", label: "Резкий"  },
-        { id: 3, tone: "Bold",   icon: "🔥", label: "Дерзкий" },
-        { id: 4, tone: "Wild",   icon: "🎲", label: "Дикий"   },
+        { id: 1, tone: "tender", icon: "💙", label: "Нежный" },
+        { id: 2, tone: "sharp", icon: "🧊", label: "Резкий" },
+        { id: 3, tone: "bold", icon: "🔥", label: "Дерзкий" },
+        { id: 4, tone: "wild", icon: "🎲", label: "Дикий" },
     ].slice(0, count);
 
     const jsonTemplate = archetypes
@@ -669,8 +856,9 @@ async function generateChoices() {
             return;
         }
 
-        const choices = parseChoices(result);
-        if (choices?.length) {
+        const rawChoices = parseChoices(result);
+        if (rawChoices?.length) {
+            const choices = rawChoices.map(normalizeChoice);
             renderButtons(choices);
         } else {
             hideLoader();
@@ -727,7 +915,7 @@ function renderButtons(choices) {
             btn.innerHTML = `
         <div class="ctu-btn-inner ctu-btn-inner--compact">
             <span class="ctu-btn-icon">${c.icon || "●"}</span>
-            <span class="ctu-btn-label">${c.label || c.tone}</span>
+            <span class="ctu-btn-label">${escapeHtml(c.label || c.tone)}</span>
         </div>
         <div class="ctu-btn-glow"></div>`;
             btn.addEventListener("click", () =>
@@ -741,7 +929,7 @@ function renderButtons(choices) {
             <div class="ctu-btn-inner">
                 <div class="ctu-btn-header">
                     <span class="ctu-btn-icon">${c.icon || "●"}</span>
-                    <span class="ctu-btn-label">${c.label || c.tone}</span>
+                    <span class="ctu-btn-label">${escapeHtml(c.label || c.tone)}</span>
                 </div>
 
                 <p class="ctu-btn-text">${escapeHtml(c.text || "")}</p>
