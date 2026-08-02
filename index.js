@@ -9,46 +9,63 @@ const DEFAULT_SETTINGS = Object.freeze({
     apiUrl: "",
     apiKey: "",
     apiModel: "",
-    promptPresets: [],   // [{ name: string, text: string }]
+    promptPresets: [],   // [{ name, text, archetypes: [{icon, label}, x4] }]
     activePreset: "",    // имя активного пресета ("" = ручной / кастомный текст)
 });
 
 // ---------------------------------------------------------------------
-// Справочник "тонов" ответа. Используется, чтобы у вариантов ВСЕГДА
-// были корректные иконка и название, даже если модель (например,
-// Claude Sonnet 5 через кастомный API) вернула невалидный / незнакомый
-// tone, пустой label, либо буквально "unidentified"/"unknown".
+// TONE_META используется ТОЛЬКО для покраски карточки (CSS-класс),
+// это никогда не показывается пользователю как текст.
 // ---------------------------------------------------------------------
-const TONE_META = {
-    tender: { icon: "💙", label: "Нежный" },
-    sharp: { icon: "🧊", label: "Резкий" },
-    bold: { icon: "🔥", label: "Дерзкий" },
-    wild: { icon: "🎲", label: "Дикий" },
-};
+const TONE_META = { tender: {}, sharp: {}, bold: {}, wild: {} };
 const TONE_ORDER = ["tender", "sharp", "bold", "wild"];
+
+// Дефолтные названия/иконки — используются, только если у активного
+// пресета НЕ заданы свои архетипы (или пресет не выбран, т.е. работает
+// встроенный промпт).
+const BUILTIN_ARCHETYPES = [
+    { icon: "💙", label: "Нежный" },
+    { icon: "🧊", label: "Резкий" },
+    { icon: "🔥", label: "Дерзкий" },
+    { icon: "🎲", label: "Дикий" },
+];
+
+const GENERIC_ICONS = ["●", "◆", "▲", "★"];
 const BAD_LABELS = new Set(["", "unidentified", "unknown", "n/a", "null", "undefined"]);
 
 /**
- * Приводит "сырой" вариант ответа от модели к безопасному виду:
- * гарантирует валидный tone/icon/label, никогда не пропускает
- * "unidentified" и подобный мусор в UI.
+ * Приводит "сырой" вариант ответа от модели к безопасному виду.
+ * Название/иконка НИКОГДА не остаются пустыми или "unidentified", но и не
+ * привязаны к жёсткому глобальному списку тонов — используется таксономия
+ * конкретного активного пресета (archetypes), либо generic "Вариант N".
+ *
+ * @param {object} raw - вариант, как его вернула модель
+ * @param {number} index - позиция варианта (0-based)
+ * @param {Array<{icon:string,label:string}>|null} archetypes - архетипы активного пресета (или null)
  */
-function normalizeChoice(raw, index) {
+function normalizeChoice(raw, index, archetypes) {
     const c = raw || {};
 
-    let toneKey = String(c.tone || "").toLowerCase().trim();
-    if (!TONE_META[toneKey]) {
-        toneKey = TONE_ORDER[index % TONE_ORDER.length];
+    // Цвет карточки — техническая деталь, не показывается пользователю текстом
+    let styleTone = String(c.tone || "").toLowerCase().trim();
+    if (!TONE_META[styleTone]) {
+        styleTone = TONE_ORDER[index % TONE_ORDER.length];
     }
-    const meta = TONE_META[toneKey];
 
-    const rawLabel = String(c.label ?? "").trim();
-    const label = BAD_LABELS.has(rawLabel.toLowerCase()) ? meta.label : rawLabel;
+    const fallbackSet = (archetypes && archetypes.length) ? archetypes : BUILTIN_ARCHETYPES;
+    const fallback = fallbackSet[index] || {};
 
-    const rawIcon = String(c.icon ?? "").trim();
-    const icon = rawIcon ? rawIcon : meta.icon;
+    let label = String(c.label ?? "").trim();
+    if (BAD_LABELS.has(label.toLowerCase())) {
+        label = (fallback.label && fallback.label.trim()) || `Вариант ${index + 1}`;
+    }
 
-    return { ...c, tone: toneKey, label, icon };
+    let icon = String(c.icon ?? "").trim();
+    if (!icon) {
+        icon = (fallback.icon && fallback.icon.trim()) || GENERIC_ICONS[index % GENERIC_ICONS.length];
+    }
+
+    return { ...c, tone: styleTone, label, icon };
 }
 
 function getSettings() {
@@ -62,6 +79,12 @@ function getSettings() {
         }
     }
     return extensionSettings[MODULE_NAME];
+}
+
+function getActivePresetObj() {
+    const s = getSettings();
+    if (!s.activePreset) return null;
+    return s.promptPresets.find((p) => p.name === s.activePreset) || null;
 }
 
 function isInActiveChat() {
@@ -155,6 +178,18 @@ function injectSettingsPanel() {
                                    class="menu_button" style="flex:0 0 auto;"
                                    value="💾 Сохранить как пресет" />
                         </div>
+
+                        <details id="ctu-archetype-details" style="margin-top:7px;">
+                            <summary style="cursor:pointer;font-size:11px;opacity:0.6;padding:3px 0;user-select:none;">
+                                🎭 Названия/иконки вариантов для этого пресета
+                                <span style="opacity:0.5;">(необязательно)</span>
+                            </summary>
+                            <div style="font-size:10px;opacity:0.5;margin:4px 0 6px;">
+                                Если модель не пришлёт своё название для варианта — будет использовано отсюда,
+                                по позиции (1-й, 2-й...). Пусто = будет "Вариант 1/2/3/4".
+                            </div>
+                            <div id="ctu-archetype-rows" style="display:flex;flex-direction:column;gap:4px;"></div>
+                        </details>
                     </div>
 
                     <hr class="sysHR" />
@@ -271,10 +306,14 @@ function syncUI() {
     if ($("ctu-api-model")) $("ctu-api-model").value = s.apiModel || "";
     updateApiStatusBadge();
     populatePresetSelect();
+
+    const active = getActivePresetObj();
+    renderArchetypeRows(active?.archetypes || []);
+    if ($("ctu-preset-name")) $("ctu-preset-name").value = s.activePreset || "";
 }
 
 // ---------------------------------------------------------------------
-// Пресеты кастомного промпта
+// Пресеты кастомного промпта (текст + собственная таксономия названий)
 // ---------------------------------------------------------------------
 
 function populatePresetSelect() {
@@ -294,6 +333,43 @@ function populatePresetSelect() {
     if (!s.activePreset) select.value = "";
 }
 
+function renderArchetypeRows(archetypes = []) {
+    const wrap = document.getElementById("ctu-archetype-rows");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+    for (let i = 0; i < 4; i++) {
+        const a = archetypes[i] || {};
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;gap:4px;align-items:center;";
+        row.innerHTML = `
+            <input type="text" class="ctu-arche-icon" data-idx="${i}" maxlength="4"
+                value="${escapeHtml(a.icon || "")}"
+                placeholder="${GENERIC_ICONS[i]}"
+                style="width:38px;text-align:center;font-size:12px;background:rgba(255,255,255,0.05);
+                       border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:5px 2px;color:inherit;box-sizing:border-box;" />
+            <input type="text" class="ctu-arche-label" data-idx="${i}"
+                value="${escapeHtml(a.label || "")}"
+                placeholder="Вариант ${i + 1}"
+                style="flex:1;font-size:11px;background:rgba(255,255,255,0.05);
+                       border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:5px 8px;color:inherit;box-sizing:border-box;" />
+        `;
+        wrap.appendChild(row);
+    }
+}
+
+function readArchetypesFromUI() {
+    const icons = [...document.querySelectorAll(".ctu-arche-icon")].sort(
+        (a, b) => +a.dataset.idx - +b.dataset.idx,
+    );
+    const labels = [...document.querySelectorAll(".ctu-arche-label")].sort(
+        (a, b) => +a.dataset.idx - +b.dataset.idx,
+    );
+    return icons.map((iconInput, i) => ({
+        icon: iconInput.value.trim(),
+        label: labels[i]?.value.trim() || "",
+    }));
+}
+
 function findPreset(name) {
     const s = getSettings();
     return s.promptPresets.find((p) => p.name === name);
@@ -307,6 +383,8 @@ function loadPresetIntoEditor(name) {
     if (!name) {
         s.activePreset = "";
         saveSettingsDebounced();
+        renderArchetypeRows([]);
+        if ($("ctu-preset-name")) $("ctu-preset-name").value = "";
         return;
     }
 
@@ -317,10 +395,11 @@ function loadPresetIntoEditor(name) {
     s.customPrompt = preset.text;
     if ($("ctu-custom-prompt")) $("ctu-custom-prompt").value = preset.text;
     if ($("ctu-preset-name")) $("ctu-preset-name").value = name;
+    renderArchetypeRows(preset.archetypes || []);
     saveSettingsDebounced();
 }
 
-function savePresetAs(name, text) {
+function savePresetAs(name, text, archetypes) {
     const { saveSettingsDebounced } = SillyTavern.getContext();
     const s = getSettings();
 
@@ -334,11 +413,18 @@ function savePresetAs(name, text) {
         return false;
     }
 
+    // отбрасываем полностью пустые слоты архетипов, чтобы не засорять сохранение
+    const cleanArchetypes = (archetypes || []).map((a) => ({
+        icon: a.icon || "",
+        label: a.label || "",
+    }));
+
     const existing = findPreset(trimmedName);
     if (existing) {
         existing.text = text;
+        existing.archetypes = cleanArchetypes;
     } else {
-        s.promptPresets.push({ name: trimmedName, text });
+        s.promptPresets.push({ name: trimmedName, text, archetypes: cleanArchetypes });
     }
 
     s.activePreset = trimmedName;
@@ -366,6 +452,7 @@ function deletePreset(name) {
 
     saveSettingsDebounced();
     populatePresetSelect();
+    renderArchetypeRows([]);
     toastr.info(`Пресет "${name}" удалён`);
 }
 
@@ -512,6 +599,8 @@ function bindSettingsEvents() {
         s.activePreset = "";
         if ($("ctu-custom-prompt")) $("ctu-custom-prompt").value = DEFAULT_PROMPT_TEMPLATE;
         if ($("ctu-preset-select")) $("ctu-preset-select").value = "";
+        if ($("ctu-preset-name")) $("ctu-preset-name").value = "";
+        renderArchetypeRows([]);
         saveSettingsDebounced();
         toastr.info("Промпт сброшен к дефолтному");
     });
@@ -523,7 +612,8 @@ function bindSettingsEvents() {
     $("ctu-preset-save-as")?.addEventListener("click", () => {
         const name = $("ctu-preset-name")?.value || "";
         const text = $("ctu-custom-prompt")?.value || "";
-        if (savePresetAs(name, text)) {
+        const archetypes = readArchetypesFromUI();
+        if (savePresetAs(name, text, archetypes)) {
             const select = $("ctu-preset-select");
             if (select) select.value = name.trim();
         }
@@ -612,7 +702,6 @@ Match the tone, language and intensity of the current scene exactly.
 - No clichés, no emotional explanations — only action and words
 - Do NOT write for {{char}}
 - Match the writing style you see in the conversation history
-- The "tone" field of every option MUST be exactly one of: tender, sharp, bold, wild (lowercase, no other values)
 - The "label" field MUST be a short human-readable name (never leave it empty, never write "unidentified" or "unknown")
 </rules>
 
@@ -838,6 +927,7 @@ async function generateChoices() {
     try {
         const ctx = SillyTavern.getContext();
         const prompt = buildPrompt();
+        const activePresetArchetypes = getActivePresetObj()?.archetypes || null;
 
         let result;
         if (s.apiUrl && s.apiKey) {
@@ -858,7 +948,9 @@ async function generateChoices() {
 
         const rawChoices = parseChoices(result);
         if (rawChoices?.length) {
-            const choices = rawChoices.map(normalizeChoice);
+            const choices = rawChoices.map((c, i) =>
+                normalizeChoice(c, i, activePresetArchetypes),
+            );
             renderButtons(choices);
         } else {
             hideLoader();
@@ -915,7 +1007,7 @@ function renderButtons(choices) {
             btn.innerHTML = `
         <div class="ctu-btn-inner ctu-btn-inner--compact">
             <span class="ctu-btn-icon">${c.icon || "●"}</span>
-            <span class="ctu-btn-label">${escapeHtml(c.label || c.tone)}</span>
+            <span class="ctu-btn-label">${escapeHtml(c.label)}</span>
         </div>
         <div class="ctu-btn-glow"></div>`;
             btn.addEventListener("click", () =>
@@ -929,7 +1021,7 @@ function renderButtons(choices) {
             <div class="ctu-btn-inner">
                 <div class="ctu-btn-header">
                     <span class="ctu-btn-icon">${c.icon || "●"}</span>
-                    <span class="ctu-btn-label">${escapeHtml(c.label || c.tone)}</span>
+                    <span class="ctu-btn-label">${escapeHtml(c.label)}</span>
                 </div>
 
                 <p class="ctu-btn-text">${escapeHtml(c.text || "")}</p>
