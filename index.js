@@ -9,6 +9,8 @@ const DEFAULT_SETTINGS = Object.freeze({
     apiUrl: "",
     apiKey: "",
     apiModel: "",
+    apiProfiles: [],       // [{ name, apiUrl, apiKey, apiModel }]
+    activeApiProfile: "",  // имя активного профиля подключения ("" = вручную)
     promptPresets: [],   // [{ name, text, archetypes: [{icon, label}, x4] }]
     activePreset: "",    // имя активного пресета ("" = ручной / кастомный текст)
 });
@@ -206,6 +208,21 @@ function injectSettingsPanel() {
                         <div style="margin-top:8px;display:flex;flex-direction:column;gap:7px;">
 
                             <div>
+                                <label style="font-size:11px;opacity:0.6;display:block;margin-bottom:3px;">Профиль подключения</label>
+                                <div style="display:flex;gap:6px;">
+                                    <select id="ctu-api-profile-select"
+                                        style="flex:1;font-size:11px;background:rgba(255,255,255,0.07);
+                                               border:1px solid rgba(255,255,255,0.15);border-radius:6px;
+                                               padding:6px 8px;color:inherit;box-sizing:border-box;">
+                                        <option value="">— вручную (без профиля) —</option>
+                                    </select>
+                                    <input type="button" id="ctu-api-profile-delete"
+                                           class="menu_button" value="🗑" title="Удалить выбранный профиль"
+                                           style="flex:0 0 auto;padding:0 10px;" />
+                                </div>
+                            </div>
+
+                            <div>
                                 <label style="font-size:11px;opacity:0.6;display:block;margin-bottom:3px;">URL (напр. https://api.openai.com/v1)</label>
                                 <input type="text" id="ctu-api-url"
                                     placeholder="Оставь пустым — используется ST"
@@ -243,6 +260,17 @@ function injectSettingsPanel() {
                                     style="width:100%;font-size:11px;background:rgba(255,255,255,0.05);
                                            border:1px solid rgba(255,255,255,0.15);border-radius:6px;
                                            padding:6px 8px;color:inherit;box-sizing:border-box;" />
+                            </div>
+
+                            <div style="display:flex;gap:6px;">
+                                <input type="text" id="ctu-api-profile-name"
+                                       placeholder="Название профиля..."
+                                       style="flex:1;font-size:11px;background:rgba(255,255,255,0.05);
+                                              border:1px solid rgba(255,255,255,0.15);border-radius:6px;
+                                              padding:6px 8px;color:inherit;box-sizing:border-box;" />
+                                <input type="button" id="ctu-api-profile-save-as"
+                                       class="menu_button" style="flex:0 0 auto;"
+                                       value="💾 Сохранить как профиль" />
                             </div>
 
                             <div id="ctu-api-msg" style="font-size:11px;display:none;padding:5px 8px;
@@ -305,6 +333,8 @@ function syncUI() {
     if ($("ctu-api-key")) $("ctu-api-key").value = s.apiKey || "";
     if ($("ctu-api-model")) $("ctu-api-model").value = s.apiModel || "";
     updateApiStatusBadge();
+    populateApiProfileSelect();
+    if ($("ctu-api-profile-name")) $("ctu-api-profile-name").value = s.activeApiProfile || "";
     populatePresetSelect();
 
     const active = getActivePresetObj();
@@ -464,6 +494,128 @@ function updateApiStatusBadge() {
     const active = !!(s.apiUrl && s.apiKey);
     badge.style.display = active ? "inline" : "none";
     if (fetchBtn) fetchBtn.style.display = active ? "block" : "none";
+}
+
+// ---------------------------------------------------------------------
+// Профили API-подключения (url + key + model + название), для быстрого
+// переключения между разными эндпоинтами.
+// ---------------------------------------------------------------------
+
+function findApiProfile(name) {
+    const s = getSettings();
+    return s.apiProfiles.find((p) => p.name === name);
+}
+
+function populateApiProfileSelect() {
+    const s = getSettings();
+    const select = document.getElementById("ctu-api-profile-select");
+    if (!select) return;
+
+    select.innerHTML = `<option value="">— вручную (без профиля) —</option>`;
+    s.apiProfiles.forEach((p) => {
+        const opt = document.createElement("option");
+        opt.value = p.name;
+        opt.textContent = p.name;
+        if (p.name === s.activeApiProfile) opt.selected = true;
+        select.appendChild(opt);
+    });
+
+    if (!s.activeApiProfile) select.value = "";
+}
+
+function resetModelPickerToManual() {
+    const sel = document.getElementById("ctu-api-model-select");
+    const inp = document.getElementById("ctu-api-model");
+    if (sel) {
+        sel.innerHTML = "";
+        sel.style.display = "none";
+    }
+    if (inp) inp.style.display = "block";
+}
+
+function loadApiProfileIntoEditor(name) {
+    const { saveSettingsDebounced } = SillyTavern.getContext();
+    const s = getSettings();
+    const $ = (id) => document.getElementById(id);
+
+    if (!name) {
+        s.activeApiProfile = "";
+        saveSettingsDebounced();
+        if ($("ctu-api-profile-name")) $("ctu-api-profile-name").value = "";
+        return;
+    }
+
+    const profile = findApiProfile(name);
+    if (!profile) return;
+
+    s.activeApiProfile = name;
+    s.apiUrl = profile.apiUrl || "";
+    s.apiKey = profile.apiKey || "";
+    s.apiModel = profile.apiModel || "";
+    saveSettingsDebounced();
+
+    if ($("ctu-api-url")) $("ctu-api-url").value = s.apiUrl;
+    if ($("ctu-api-key")) $("ctu-api-key").value = s.apiKey;
+    if ($("ctu-api-model")) $("ctu-api-model").value = s.apiModel;
+    if ($("ctu-api-profile-name")) $("ctu-api-profile-name").value = name;
+
+    resetModelPickerToManual();
+    updateApiStatusBadge();
+    toastr.success(`Профиль "${name}" подключён!`);
+}
+
+function saveApiProfileAs(name, apiUrl, apiKey, apiModel) {
+    const { saveSettingsDebounced } = SillyTavern.getContext();
+    const s = getSettings();
+
+    const trimmedName = (name || "").trim();
+    if (!trimmedName) {
+        toastr.warning("Введите название профиля");
+        return false;
+    }
+    if (!apiUrl || !apiUrl.trim()) {
+        toastr.warning("URL пуст — нечего сохранять");
+        return false;
+    }
+
+    const existing = findApiProfile(trimmedName);
+    if (existing) {
+        existing.apiUrl = apiUrl;
+        existing.apiKey = apiKey;
+        existing.apiModel = apiModel;
+    } else {
+        s.apiProfiles.push({ name: trimmedName, apiUrl, apiKey, apiModel });
+    }
+
+    s.activeApiProfile = trimmedName;
+    s.apiUrl = apiUrl;
+    s.apiKey = apiKey;
+    s.apiModel = apiModel;
+    saveSettingsDebounced();
+    populateApiProfileSelect();
+    updateApiStatusBadge();
+    toastr.success(`Профиль "${trimmedName}" сохранён!`);
+    return true;
+}
+
+function deleteApiProfile(name) {
+    const { saveSettingsDebounced } = SillyTavern.getContext();
+    const s = getSettings();
+
+    if (!name) {
+        toastr.info("Сначала выберите профиль из списка");
+        return;
+    }
+
+    const idx = s.apiProfiles.findIndex((p) => p.name === name);
+    if (idx === -1) return;
+
+    s.apiProfiles.splice(idx, 1);
+    if (s.activeApiProfile === name) s.activeApiProfile = "";
+
+    saveSettingsDebounced();
+    populateApiProfileSelect();
+    toastr.info(`Профиль "${name}" удалён`);
 }
 
 async function fetchAndShowModels() {
@@ -640,6 +792,30 @@ function bindSettingsEvents() {
 
     $("ctu-fetch-models")?.addEventListener("click", fetchAndShowModels);
 
+    // Профили подключения (url + key + model + название)
+    $("ctu-api-profile-select")?.addEventListener("change", (e) => {
+        loadApiProfileIntoEditor(e.target.value);
+    });
+    $("ctu-api-profile-save-as")?.addEventListener("click", () => {
+        const name = $("ctu-api-profile-name")?.value || "";
+        const url = $("ctu-api-url")?.value?.trim() || "";
+        const key = $("ctu-api-key")?.value?.trim() || "";
+        const sel = $("ctu-api-model-select");
+        const inp = $("ctu-api-model");
+        const model =
+            (sel?.style.display !== "none" ? sel?.value : inp?.value)?.trim() ||
+            "";
+        if (saveApiProfileAs(name, url, key, model)) {
+            const select = $("ctu-api-profile-select");
+            if (select) select.value = name.trim();
+        }
+    });
+    $("ctu-api-profile-delete")?.addEventListener("click", () => {
+        const name = $("ctu-api-profile-select")?.value || "";
+        deleteApiProfile(name);
+        if ($("ctu-api-profile-name")) $("ctu-api-profile-name").value = "";
+    });
+
     $("ctu-save-api")?.addEventListener("click", () => {
         s.apiUrl = $("ctu-api-url")?.value?.trim() || "";
         s.apiKey = $("ctu-api-key")?.value?.trim() || "";
@@ -663,16 +839,13 @@ function bindSettingsEvents() {
         s.apiUrl = "";
         s.apiKey = "";
         s.apiModel = "";
+        s.activeApiProfile = "";
         if ($("ctu-api-url")) $("ctu-api-url").value = "";
         if ($("ctu-api-key")) $("ctu-api-key").value = "";
         if ($("ctu-api-model")) $("ctu-api-model").value = "";
-        const sel = $("ctu-api-model-select");
-        if (sel) {
-            sel.innerHTML = "";
-            sel.style.display = "none";
-        }
-        const inp = $("ctu-api-model");
-        if (inp) inp.style.display = "block";
+        if ($("ctu-api-profile-name")) $("ctu-api-profile-name").value = "";
+        resetModelPickerToManual();
+        populateApiProfileSelect();
         saveSettingsDebounced();
         updateApiStatusBadge();
         toastr.info("API очищен — используется ST.");
