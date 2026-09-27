@@ -37,18 +37,10 @@ const BAD_LABELS = new Set(["", "unidentified", "unknown", "n/a", "null", "undef
 
 /**
  * Приводит "сырой" вариант ответа от модели к безопасному виду.
- * Название/иконка НИКОГДА не остаются пустыми или "unidentified", но и не
- * привязаны к жёсткому глобальному списку тонов — используется таксономия
- * конкретного активного пресета (archetypes), либо generic "Вариант N".
- *
- * @param {object} raw - вариант, как его вернула модель
- * @param {number} index - позиция варианта (0-based)
- * @param {Array<{icon:string,label:string}>|null} archetypes - архетипы активного пресета (или null)
  */
 function normalizeChoice(raw, index, archetypes) {
-    const c = raw || {};
+    const c = typeof raw === "string" ? { text: raw } : (raw || {});
 
-    // Цвет карточки — техническая деталь, не показывается пользователю текстом
     let styleTone = String(c.tone || "").toLowerCase().trim();
     if (!TONE_META[styleTone]) {
         styleTone = TONE_ORDER[index % TONE_ORDER.length];
@@ -67,7 +59,9 @@ function normalizeChoice(raw, index, archetypes) {
         icon = (fallback.icon && fallback.icon.trim()) || GENERIC_ICONS[index % GENERIC_ICONS.length];
     }
 
-    return { ...c, tone: styleTone, label, icon };
+    let text = String(c.text ?? "").trim();
+
+    return { ...c, tone: styleTone, label, icon, text };
 }
 
 function getSettings() {
@@ -223,7 +217,7 @@ function injectSettingsPanel() {
                             </div>
 
                             <div>
-                                <label style="font-size:11px;opacity:0.6;display:block;margin-bottom:3px;">URL (напр. https://api.openai.com/v1)</label>
+                                <label style="font-size:11px;opacity:0.6;display:block;margin-bottom:3px;">URL (напр. [https://api.openai.com/v1](https://api.openai.com/v1))</label>
                                 <input type="text" id="ctu-api-url"
                                     placeholder="Оставь пустым — используется ST"
                                     style="width:100%;font-size:11px;background:rgba(255,255,255,0.05);
@@ -343,7 +337,7 @@ function syncUI() {
 }
 
 // ---------------------------------------------------------------------
-// Пресеты кастомного промпта (текст + собственная таксономия названий)
+// Пресеты кастомного промпта
 // ---------------------------------------------------------------------
 
 function populatePresetSelect() {
@@ -443,7 +437,6 @@ function savePresetAs(name, text, archetypes) {
         return false;
     }
 
-    // отбрасываем полностью пустые слоты архетипов, чтобы не засорять сохранение
     const cleanArchetypes = (archetypes || []).map((a) => ({
         icon: a.icon || "",
         label: a.label || "",
@@ -497,8 +490,7 @@ function updateApiStatusBadge() {
 }
 
 // ---------------------------------------------------------------------
-// Профили API-подключения (url + key + model + название), для быстрого
-// переключения между разными эндпоинтами.
+// Профили API-подключения
 // ---------------------------------------------------------------------
 
 function findApiProfile(name) {
@@ -739,7 +731,6 @@ function bindSettingsEvents() {
         saveSettingsDebounced();
     });
 
-    // Ручное сохранение текста в текущий customPrompt (без создания пресета)
     $("ctu-save-prompt")?.addEventListener("click", () => {
         const val = $("ctu-custom-prompt")?.value?.trim() || "";
         s.customPrompt = (val === DEFAULT_PROMPT_TEMPLATE.trim()) ? "" : val;
@@ -757,7 +748,6 @@ function bindSettingsEvents() {
         toastr.info("Промпт сброшен к дефолтному");
     });
 
-    // Пресеты
     $("ctu-preset-select")?.addEventListener("change", (e) => {
         loadPresetIntoEditor(e.target.value);
     });
@@ -792,7 +782,6 @@ function bindSettingsEvents() {
 
     $("ctu-fetch-models")?.addEventListener("click", fetchAndShowModels);
 
-    // Профили подключения (url + key + model + название)
     $("ctu-api-profile-select")?.addEventListener("change", (e) => {
         loadApiProfileIntoEditor(e.target.value);
     });
@@ -876,9 +865,10 @@ Match the tone, language and intensity of the current scene exactly.
 - Do NOT write for {{char}}
 - Match the writing style you see in the conversation history
 - The "label" field MUST be a short human-readable name (never leave it empty, never write "unidentified" or "unknown")
+- Use single quotes or escape inner double quotes inside string fields
 </rules>
 
-Return ONLY raw JSON, no markdown:
+Return ONLY raw JSON object with "choices" array:
 {"choices":[
     {{json_template}}
 ]}`;
@@ -937,634 +927,11 @@ function buildPrompt() {
     return buildDefaultPrompt(ctx, s.maxChoices);
 }
 
-// Valid escape chars that JSON allows right after a backslash inside a string.
-const JSON_VALID_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
+function sanitizeJsonResponse(raw) {
+    if (!raw || typeof raw !== "string") return "";
 
-/**
- * Находит индекс символа, закрывающего скобку/фигурную скобку, открытую в
- * позиции startIdx, учитывая вложенность и то, что скобки внутри строк
- * (в кавычках) считать не нужно. Возвращает -1, если пара не найдена
- * (объект/массив обрезан или иначе повреждён).
- */
-function findMatchingBracket(text, startIdx, openCh, closeCh) {
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
+    let text = raw;
 
-    for (let i = startIdx; i < text.length; i++) {
-        const ch = text[i];
-
-        if (inString) {
-            if (escaped) {
-                escaped = false;
-                continue;
-            }
-            if (ch === "\\") {
-                escaped = true;
-                continue;
-            }
-            if (ch === '"') inString = false;
-            continue;
-        }
-
-        if (ch === '"') {
-            inString = true;
-            continue;
-        }
-        if (ch === openCh) {
-            depth++;
-        } else if (ch === closeCh) {
-            depth--;
-            if (depth === 0) return i;
-        }
-    }
-    return -1;
-}
-
-/**
- * Вырезает первый полноценный JSON-объект { ... } из произвольного текста,
- * корректно считая вложенные скобки и игнорируя { } внутри строковых
- * значений (например, если модель написала "текст с { фигурной скобкой }").
- * Это надёжнее, чем indexOf("{") + lastIndexOf("}"), которые ломаются,
- * если после JSON идёт ещё какой-то текст модели с собственными скобками.
- */
-function extractJsonObject(text) {
-    const start = text.indexOf("{");
-    if (start === -1) return null;
-    const end = findMatchingBracket(text, start, "{", "}");
-    if (end === -1) return null;
-    return text.slice(start, end + 1);
-}
-
-/**
- * Разбирает содержимое JSON-массива (без внешних []) на строки отдельных
- * top-level объектов { ... }, снова учитывая вложенность и строки.
- * Нужно, чтобы можно было распарсить каждый вариант отдельно, даже если
- * один из них повреждён.
- */
-function collectTopLevelObjects(text) {
-    const objects = [];
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    let start = -1;
-
-    for (let i = 0; i < text.length; i++) {
-        const ch = text[i];
-
-        if (inString) {
-            if (escaped) {
-                escaped = false;
-                continue;
-            }
-            if (ch === "\\") {
-                escaped = true;
-                continue;
-            }
-            if (ch === '"') inString = false;
-            continue;
-        }
-
-        if (ch === '"') {
-            inString = true;
-            continue;
-        }
-        if (ch === "{") {
-            if (depth === 0) start = i;
-            depth++;
-        } else if (ch === "}") {
-            depth--;
-            if (depth === 0 && start !== -1) {
-                objects.push(text.slice(start, i + 1));
-                start = -1;
-            }
-        }
-    }
-    return objects;
-}
-
-/**
- * Многие не-Claude модели (GPT/Gemini и т.п.) не так строго следуют
- * инструкции "верни чистый JSON" и часто портят его одним из типичных
- * способов, из-за которых JSON.parse падает целиком:
- *  - вставляют настоящий перенос строки/таб внутрь строкового значения
- *    вместо экранированных \n / \t;
- *  - используют одиночный обратный слеш там, где это не валидный
- *    escape-символ JSON (например, в пути вида "C:\Users" или в смайлике);
- *  - забывают экранировать кавычки внутри значения (не только в "text",
- *    но и в "label" — например, название варианта в кавычках).
- * Эта функция проходит по строке символ за символом и чинит все три
- * случая для ЛЮБОГО поля, а не только "text", как было раньше.
- */
-function sanitizeJsonString(jsonStr) {
-    let result = "";
-    let inString = false;
-    let escaped = false;
-    let expectingValue = false; // true сразу после ":" вне строки
-
-    for (let i = 0; i < jsonStr.length; i++) {
-        const ch = jsonStr[i];
-
-        if (inString) {
-            if (escaped) {
-                result += ch;
-                escaped = false;
-                continue;
-            }
-
-            if (ch === "\\") {
-                const next = jsonStr[i + 1];
-                if (JSON_VALID_ESCAPES.has(next)) {
-                    result += ch;
-                    escaped = true;
-                } else {
-                    // Невалидный escape (напр. "\U" в пути) — экранируем сам
-                    // слеш, а следующий символ обработается как обычный.
-                    result += "\\\\";
-                }
-                continue;
-            }
-
-            if (ch === "\n") {
-                result += "\\n";
-                continue;
-            }
-            if (ch === "\r") {
-                continue; // \r\n уже даст \n на следующей итерации
-            }
-            if (ch === "\t") {
-                result += "\\t";
-                continue;
-            }
-
-            if (ch === '"') {
-                // Смотрим вперёд: если следующий значимый символ похож на
-                // конец значения/ключа — это настоящий конец строки, иначе
-                // это неэкранированная кавычка внутри текста модели.
-                let j = i + 1;
-                while (j < jsonStr.length && /\s/.test(jsonStr[j])) j++;
-                const nextCh = jsonStr[j];
-                const isEnd =
-                    nextCh === undefined ||
-                    (expectingValue
-                        ? nextCh === "," || nextCh === "}" || nextCh === "]"
-                        : nextCh === ":");
-
-                if (isEnd) {
-                    inString = false;
-                    result += ch;
-                } else {
-                    result += '\\"';
-                }
-                continue;
-            }
-
-            result += ch;
-            continue;
-        }
-
-        // Вне строки
-        if (ch === '"') {
-            inString = true;
-            result += ch;
-            continue;
-        }
-        if (ch === ":") {
-            expectingValue = true;
-            result += ch;
-            continue;
-        }
-        if (ch === "," || ch === "{" || ch === "[" || ch === "}" || ch === "]") {
-            expectingValue = false;
-            result += ch;
-            continue;
-        }
-        result += ch;
-    }
-
-    return result;
-}
-
-const stripTrailingCommas = (s) => s.replace(/,\s*([}\]])/g, "$1");
-
-/**
- * Запасной путь: даже если весь объект целиком не парсится, пытаемся
- * вытащить массив "choices" и распарсить каждый вариант ПО ОТДЕЛЬНОСТИ.
- * Так один сломанный вариант (например, из-за экзотического форматирования
- * от конкретной модели) не обнуляет остальные три.
- */
-function salvageChoicesArray(jsonStr) {
-    const keyIdx = jsonStr.indexOf('"choices"');
-    if (keyIdx === -1) return null;
-
-    const bracketIdx = jsonStr.indexOf("[", keyIdx);
-    if (bracketIdx === -1) return null;
-
-    const endIdx = findMatchingBracket(jsonStr, bracketIdx, "[", "]");
-    if (endIdx === -1) return null;
-
-    const inner = jsonStr.slice(bracketIdx + 1, endIdx);
-    const objStrings = collectTopLevelObjects(inner);
-
-    const results = [];
-    for (const objStr of objStrings) {
-        const attempt1 = stripTrailingCommas(objStr);
-        try {
-            results.push(JSON.parse(attempt1));
-            continue;
-        } catch (_) {
-            // пробуем починить кавычки/переносы строк и распарсить ещё раз
-        }
-        try {
-            results.push(JSON.parse(stripTrailingCommas(sanitizeJsonString(objStr))));
-        } catch (_) {
-            // этот вариант не спасти — пропускаем, но не теряем остальные
-        }
-    }
-
-    return results.length ? results : null;
-}
-
-function parseChoices(raw) {
-    if (!raw?.trim()) return null;
-    try {
-        let clean = raw
-            .replace(/\r\n/g, "\n")
-            .replace(/\r/g, "\n")
-            .replace(/<think>[\s\S]*?<\/think>/gi, "")
-            .replace(/<think>[^]*?(?=\{)/gi, "")
-            .replace(/```json\s*/gi, "")
-            .replace(/```\s*/gi, "")
-            .trim();
-
-        let jsonStr = extractJsonObject(clean);
-        if (!jsonStr) return null;
-
-        jsonStr = jsonStr.replace(/"<\/([^>]*?)>\s*([},\]])/g, '"$2');
-        jsonStr = jsonStr.replace(/<\/[^>]*?>/g, "");
-        jsonStr = stripTrailingCommas(jsonStr);
-
-        let data = null;
-        try {
-            data = JSON.parse(jsonStr);
-        } catch (_) {
-            try {
-                data = JSON.parse(stripTrailingCommas(sanitizeJsonString(jsonStr)));
-            } catch (_e2) {
-                data = null;
-            }
-        }
-
-        if (data && Array.isArray(data.choices) && data.choices.length) {
-            return data.choices;
-        }
-
-        // Основной парсинг не удался целиком — пробуем спасти варианты по одному.
-        const salvaged = salvageChoicesArray(jsonStr);
-        if (salvaged?.length) return salvaged;
-
-        return null;
-    } catch (e) {
-        console.error(
-            `[${MODULE_NAME}] parse error:`,
-            e.message,
-            raw?.slice(0, 300),
-        );
-        return null;
-    }
-}
-
-async function callCustomApi(prompt) {
-    const s = getSettings();
-    const baseUrl = s.apiUrl
-        .replace(/\/$/, "")
-        .replace(/\/chat\/completions$/, "");
-    const endpoint = `${baseUrl}/chat/completions`;
-
-    const sel = document.getElementById("ctu-api-model-select");
-    const modelFromSelect = sel?.style.display !== "none" ? sel?.value : null;
-    const model = modelFromSelect || s.apiModel || "gpt-4o-mini";
-
-    const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${s.apiKey}`,
-        },
-        body: JSON.stringify({
-            model: model,
-            messages: [{ role: "user", content: prompt }],
-            temperature: 0.9,
-            max_tokens: 1000,
-        }),
-    });
-
-    const data = await response.json();
-
-    if (data.error) {
-        const msg = data.error.message || JSON.stringify(data.error);
-        throw new Error(msg);
-    }
-
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-    }
-
-    return data.choices?.[0]?.message?.content || null;
-}
-
-async function generateChoices() {
-    const s = getSettings();
-
-    if (!s.enabled) {
-        toastr.info("Choice Tree UI отключён");
-        return;
-    }
-
-    if (!isInActiveChat()) {
-        toastr.warning("Choice Tree UI: откройте чат с персонажем");
-        return;
-    }
-
-    showLoader();
-
-    try {
-        const ctx = SillyTavern.getContext();
-        const prompt = buildPrompt();
-        const activePresetArchetypes = getActivePresetObj()?.archetypes || null;
-
-        let result;
-        if (s.apiUrl && s.apiKey) {
-            result = await callCustomApi(prompt);
-        } else {
-            try {
-                result = await ctx.generateQuietPrompt({ quietPrompt: prompt });
-            } catch {
-                result = await ctx.generateQuietPrompt(prompt, false, false);
-            }
-        }
-
-        if (!result) {
-            hideLoader();
-            toastr.warning("Пустой ответ");
-            return;
-        }
-
-        const rawChoices = parseChoices(result);
-        if (rawChoices?.length) {
-            const choices = rawChoices.map((c, i) =>
-                normalizeChoice(c, i, activePresetArchetypes),
-            );
-            renderButtons(choices);
-        } else {
-            hideLoader();
-            toastr.warning(
-                "Choice Tree UI: не удалось распарсить. F12 → Console",
-            );
-        }
-    } catch (err) {
-        console.error(`[${MODULE_NAME}] Ошибка:`, err);
-        toastr.error(`Choice Tree UI: ${err.message}`);
-        hideLoader();
-    }
-}
-
-function escapeHtml(value) {
-    return String(value ?? "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
-}
-
-function renderButtons(choices) {
-    removeContainer();
-    const s = getSettings();
-
-    const wrap = document.createElement("div");
-    wrap.id = "ctu-container";
-    wrap.className = `ctu-container${s.compactMode ? " ctu-compact" : ""}`;
-
-    const header = document.createElement("div");
-    header.className = "ctu-header";
-    header.innerHTML = `
-        <span class="ctu-header-icon">✦</span>
-        <span class="ctu-header-title">${s.compactMode ? "Ответить..." : "Выберите ответ"}</span>
-        <button class="ctu-close-btn" title="Закрыть">✕</button>`;
-    header.querySelector(".ctu-close-btn").onclick = removeContainer;
-    wrap.appendChild(header);
-
-    const grid = document.createElement("div");
-    grid.className = "ctu-grid";
-
-    choices.forEach((c, i) => {
-        const tone = (c.tone || "tender").toLowerCase();
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = `ctu-choice-btn ctu-tone-${tone}`;
-        btn.style.animationDelay = `${i * 60}ms`;
-        btn.dataset.choiceText = c.text || "";
-        btn.dataset.expanded = "false";
-
-        if (s.compactMode) {
-            btn.innerHTML = `
-        <div class="ctu-btn-inner ctu-btn-inner--compact">
-            <span class="ctu-btn-icon">${c.icon || "●"}</span>
-            <span class="ctu-btn-label">${escapeHtml(c.label)}</span>
-        </div>
-        <div class="ctu-btn-glow"></div>`;
-            btn.addEventListener("click", () =>
-                applyChoice(c.text || ""),
-            );
-            grid.appendChild(btn);
-            return;
-        }
-
-        btn.innerHTML = `
-            <div class="ctu-btn-inner">
-                <div class="ctu-btn-header">
-                    <span class="ctu-btn-icon">${c.icon || "●"}</span>
-                    <span class="ctu-btn-label">${escapeHtml(c.label)}</span>
-                </div>
-
-                <p class="ctu-btn-text">${escapeHtml(c.text || "")}</p>
-
-                <div class="ctu-btn-full">
-                    <div class="ctu-btn-full-text">${escapeHtml(c.text || "")}</div>
-
-                    <div class="ctu-btn-actions">
-                        <button type="button" class="ctu-action-btn ctu-action-btn--primary" data-act="insert">
-                            Вставить
-                        </button>
-                        <button type="button" class="ctu-action-btn ctu-action-btn--accent" data-act="send">
-                            Отправить
-                        </button>
-                    </div>
-                </div>
-            </div>
-            <div class="ctu-btn-glow"></div>
-        `;
-
-        btn.addEventListener("click", (event) => {
-            const actionBtn = event.target.closest(".ctu-action-btn");
-            if (actionBtn) return;
-
-            toggleExpandedChoice(btn);
-        });
-
-        btn.querySelectorAll(".ctu-action-btn").forEach((actionButton) => {
-            actionButton.addEventListener("click", (event) => {
-                event.stopPropagation();
-
-                const action = actionButton.dataset.act;
-                const text = c.text || "";
-
-                if (action === "insert") {
-                    applyChoice(text);
-                    btn.classList.add("ctu-btn-picked");
-                    setTimeout(
-                        () => btn.classList.remove("ctu-btn-picked"),
-                        450,
-                    );
-                    return;
-                }
-
-                if (action === "send") {
-                    applyChoice(text);
-                    removeContainer();
-                    document.getElementById("send_but")?.click();
-                    return;
-                }
-
-            });
-        });
-
-        grid.appendChild(btn);
-    });
-
-    wrap.appendChild(grid);
-
-    const chatEl = document.getElementById("chat");
-    const lastMsg = chatEl?.querySelector(".mes:last-child");
-    if (lastMsg) lastMsg.after(wrap);
-    else if (chatEl) chatEl.appendChild(wrap);
-    else document.getElementById("send_form")?.before(wrap);
-
-    setTimeout(
-        () => wrap.scrollIntoView({ behavior: "smooth", block: "nearest" }),
-        150,
-    );
-}
-
-function toggleExpandedChoice(targetBtn) {
-    const all = document.querySelectorAll(".ctu-choice-btn");
-
-    all.forEach((btn) => {
-        if (btn === targetBtn) return;
-
-        btn.classList.remove("ctu-expanded");
-        btn.dataset.expanded = "false";
-    });
-
-    const isExpanded = targetBtn.dataset.expanded === "true";
-    targetBtn.dataset.expanded = isExpanded ? "false" : "true";
-    targetBtn.classList.toggle("ctu-expanded", !isExpanded);
-
-    if (!isExpanded) {
-        setTimeout(() => {
-            targetBtn.scrollIntoView({
-                behavior: "smooth",
-                block: "nearest",
-                inline: "nearest",
-            });
-        }, 80);
-    }
-}
-
-function applyChoice(text) {
-    const ta = document.getElementById("send_textarea");
-    if (ta) {
-        ta.value = text;
-        ta.dispatchEvent(new Event("input", { bubbles: true }));
-        ta.focus();
-    }
-}
-
-function removeContainer() {
-    const el = document.getElementById("ctu-container");
-    if (!el) return;
-    el.classList.add("ctu-fade-out");
-    setTimeout(() => el.remove(), 280);
-}
-
-function showLoader() {
-    removeContainer();
-    const s = getSettings();
-    const el = document.createElement("div");
-    el.id = "ctu-container";
-    el.className = `ctu-container ctu-loading${s.compactMode ? " ctu-compact" : ""}`;
-    el.innerHTML = `
-        <div class="ctu-header">
-            <span class="ctu-header-icon">✦</span>
-            <span class="ctu-header-title">Генерация вариантов...</span>
-        </div>
-        <div class="ctu-skeleton-grid">
-            ${[0, 60, 120, 180]
-                .map(
-                    (d) => `
-                <div class="ctu-skeleton" style="animation-delay:${d}ms">
-                    <div class="ctu-skeleton-line short"></div>
-                    ${s.compactMode ? "" : '<div class="ctu-skeleton-line"></div><div class="ctu-skeleton-line medium"></div>'}
-                </div>`,
-                )
-                .join("")}
-        </div>`;
-    const lastMsg = document.querySelector("#chat .mes:last-child");
-    lastMsg
-        ? lastMsg.after(el)
-        : document.getElementById("chat")?.appendChild(el);
-}
-
-function hideLoader() {
-    const el = document.getElementById("ctu-container");
-    if (el?.classList.contains("ctu-loading")) el.remove();
-}
-
-function injectButton() {
-    if (document.getElementById("ctu-manual-btn")) return;
-    const btn = document.createElement("button");
-    btn.id = "ctu-manual-btn";
-    btn.className = "ctu-manual-btn";
-    btn.title = "Варианты ответа (Choice Tree UI)";
-    btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-        stroke="currentColor" stroke-width="2" stroke-linecap="round">
-        <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>
-    </svg>`;
-    btn.addEventListener("click", generateChoices);
-    document
-        .getElementById("send_but")
-        ?.parentNode?.insertBefore(btn, document.getElementById("send_but"));
-}
-
-function bindHooks() {
-    const { eventSource, event_types } = SillyTavern.getContext();
-
-    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, () => {
-        const s = getSettings();
-        if (s.enabled && s.autoGenerate && isInActiveChat()) {
-            setTimeout(generateChoices, 500);
-        }
-    });
-
-    eventSource.on(event_types.CHAT_CHANGED, removeContainer);
-}
-
-(function init() {
-    const { eventSource, event_types } = SillyTavern.getContext();
-    eventSource.on(event_types.APP_READY, () => {
-        injectSettingsPanel();
-        injectButton();
-        bindHooks();
-    });
-})();
+    // Удаляем теги мыслей (think, thought, reasoning, details)
+    text = text.replace(/<(think|thought|reasoning|details)[\s\S]*?<\/\1>/gi, "");
+    text = text.
