@@ -937,102 +937,293 @@ function buildPrompt() {
     return buildDefaultPrompt(ctx, s.maxChoices);
 }
 
-function fixJsonQuotes(jsonStr) {
-    let result = "";
+// Valid escape chars that JSON allows right after a backslash inside a string.
+const JSON_VALID_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
+
+/**
+ * Находит индекс символа, закрывающего скобку/фигурную скобку, открытую в
+ * позиции startIdx, учитывая вложенность и то, что скобки внутри строк
+ * (в кавычках) считать не нужно. Возвращает -1, если пара не найдена
+ * (объект/массив обрезан или иначе повреждён).
+ */
+function findMatchingBracket(text, startIdx, openCh, closeCh) {
+    let depth = 0;
     let inString = false;
     let escaped = false;
-    let keyBuffer = "";
-    let isTextValue = false;
 
-    for (let i = 0; i < jsonStr.length; i++) {
-        const ch = jsonStr[i];
+    for (let i = startIdx; i < text.length; i++) {
+        const ch = text[i];
 
-        if (escaped) {
-            result += ch;
-            escaped = false;
-            if (inString) keyBuffer += ch;
-            continue;
-        }
-
-        if (ch === "\\") {
-            result += ch;
-            escaped = true;
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (ch === "\\") {
+                escaped = true;
+                continue;
+            }
+            if (ch === '"') inString = false;
             continue;
         }
 
         if (ch === '"') {
-            if (!inString) {
-                inString = true;
-                keyBuffer = "";
-                result += ch;
-            } else {
-                if (isTextValue) {
-                    let j = i + 1;
-                    while (
-                        j < jsonStr.length &&
-                        (jsonStr[j] === " " ||
-                            jsonStr[j] === "\n" ||
-                            jsonStr[j] === "\r")
-                    )
-                        j++;
-                    const next = jsonStr[j];
-                    if (next === "," || next === "}" || next === "]") {
-                        inString = false;
-                        isTextValue = false;
-                        result += ch;
-                    } else {
-                        result += '\\"';
-                    }
-                } else {
-                    inString = false;
-                    const trimmed = keyBuffer.trim();
-                    if (trimmed === "text") {
-                        isTextValue = true;
-                    }
-                    result += ch;
-                    keyBuffer = "";
-                }
+            inString = true;
+            continue;
+        }
+        if (ch === openCh) {
+            depth++;
+        } else if (ch === closeCh) {
+            depth--;
+            if (depth === 0) return i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * Вырезает первый полноценный JSON-объект { ... } из произвольного текста,
+ * корректно считая вложенные скобки и игнорируя { } внутри строковых
+ * значений (например, если модель написала "текст с { фигурной скобкой }").
+ * Это надёжнее, чем indexOf("{") + lastIndexOf("}"), которые ломаются,
+ * если после JSON идёт ещё какой-то текст модели с собственными скобками.
+ */
+function extractJsonObject(text) {
+    const start = text.indexOf("{");
+    if (start === -1) return null;
+    const end = findMatchingBracket(text, start, "{", "}");
+    if (end === -1) return null;
+    return text.slice(start, end + 1);
+}
+
+/**
+ * Разбирает содержимое JSON-массива (без внешних []) на строки отдельных
+ * top-level объектов { ... }, снова учитывая вложенность и строки.
+ * Нужно, чтобы можно было распарсить каждый вариант отдельно, даже если
+ * один из них повреждён.
+ */
+function collectTopLevelObjects(text) {
+    const objects = [];
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let start = -1;
+
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+                continue;
             }
+            if (ch === "\\") {
+                escaped = true;
+                continue;
+            }
+            if (ch === '"') inString = false;
             continue;
         }
 
+        if (ch === '"') {
+            inString = true;
+            continue;
+        }
+        if (ch === "{") {
+            if (depth === 0) start = i;
+            depth++;
+        } else if (ch === "}") {
+            depth--;
+            if (depth === 0 && start !== -1) {
+                objects.push(text.slice(start, i + 1));
+                start = -1;
+            }
+        }
+    }
+    return objects;
+}
+
+/**
+ * Многие не-Claude модели (GPT/Gemini и т.п.) не так строго следуют
+ * инструкции "верни чистый JSON" и часто портят его одним из типичных
+ * способов, из-за которых JSON.parse падает целиком:
+ *  - вставляют настоящий перенос строки/таб внутрь строкового значения
+ *    вместо экранированных \n / \t;
+ *  - используют одиночный обратный слеш там, где это не валидный
+ *    escape-символ JSON (например, в пути вида "C:\Users" или в смайлике);
+ *  - забывают экранировать кавычки внутри значения (не только в "text",
+ *    но и в "label" — например, название варианта в кавычках).
+ * Эта функция проходит по строке символ за символом и чинит все три
+ * случая для ЛЮБОГО поля, а не только "text", как было раньше.
+ */
+function sanitizeJsonString(jsonStr) {
+    let result = "";
+    let inString = false;
+    let escaped = false;
+    let expectingValue = false; // true сразу после ":" вне строки
+
+    for (let i = 0; i < jsonStr.length; i++) {
+        const ch = jsonStr[i];
+
+        if (inString) {
+            if (escaped) {
+                result += ch;
+                escaped = false;
+                continue;
+            }
+
+            if (ch === "\\") {
+                const next = jsonStr[i + 1];
+                if (JSON_VALID_ESCAPES.has(next)) {
+                    result += ch;
+                    escaped = true;
+                } else {
+                    // Невалидный escape (напр. "\U" в пути) — экранируем сам
+                    // слеш, а следующий символ обработается как обычный.
+                    result += "\\\\";
+                }
+                continue;
+            }
+
+            if (ch === "\n") {
+                result += "\\n";
+                continue;
+            }
+            if (ch === "\r") {
+                continue; // \r\n уже даст \n на следующей итерации
+            }
+            if (ch === "\t") {
+                result += "\\t";
+                continue;
+            }
+
+            if (ch === '"') {
+                // Смотрим вперёд: если следующий значимый символ похож на
+                // конец значения/ключа — это настоящий конец строки, иначе
+                // это неэкранированная кавычка внутри текста модели.
+                let j = i + 1;
+                while (j < jsonStr.length && /\s/.test(jsonStr[j])) j++;
+                const nextCh = jsonStr[j];
+                const isEnd =
+                    nextCh === undefined ||
+                    (expectingValue
+                        ? nextCh === "," || nextCh === "}" || nextCh === "]"
+                        : nextCh === ":");
+
+                if (isEnd) {
+                    inString = false;
+                    result += ch;
+                } else {
+                    result += '\\"';
+                }
+                continue;
+            }
+
+            result += ch;
+            continue;
+        }
+
+        // Вне строки
+        if (ch === '"') {
+            inString = true;
+            result += ch;
+            continue;
+        }
+        if (ch === ":") {
+            expectingValue = true;
+            result += ch;
+            continue;
+        }
+        if (ch === "," || ch === "{" || ch === "[" || ch === "}" || ch === "]") {
+            expectingValue = false;
+            result += ch;
+            continue;
+        }
         result += ch;
-        if (inString) keyBuffer += ch;
     }
 
     return result;
+}
+
+const stripTrailingCommas = (s) => s.replace(/,\s*([}\]])/g, "$1");
+
+/**
+ * Запасной путь: даже если весь объект целиком не парсится, пытаемся
+ * вытащить массив "choices" и распарсить каждый вариант ПО ОТДЕЛЬНОСТИ.
+ * Так один сломанный вариант (например, из-за экзотического форматирования
+ * от конкретной модели) не обнуляет остальные три.
+ */
+function salvageChoicesArray(jsonStr) {
+    const keyIdx = jsonStr.indexOf('"choices"');
+    if (keyIdx === -1) return null;
+
+    const bracketIdx = jsonStr.indexOf("[", keyIdx);
+    if (bracketIdx === -1) return null;
+
+    const endIdx = findMatchingBracket(jsonStr, bracketIdx, "[", "]");
+    if (endIdx === -1) return null;
+
+    const inner = jsonStr.slice(bracketIdx + 1, endIdx);
+    const objStrings = collectTopLevelObjects(inner);
+
+    const results = [];
+    for (const objStr of objStrings) {
+        const attempt1 = stripTrailingCommas(objStr);
+        try {
+            results.push(JSON.parse(attempt1));
+            continue;
+        } catch (_) {
+            // пробуем починить кавычки/переносы строк и распарсить ещё раз
+        }
+        try {
+            results.push(JSON.parse(stripTrailingCommas(sanitizeJsonString(objStr))));
+        } catch (_) {
+            // этот вариант не спасти — пропускаем, но не теряем остальные
+        }
+    }
+
+    return results.length ? results : null;
 }
 
 function parseChoices(raw) {
     if (!raw?.trim()) return null;
     try {
         let clean = raw
+            .replace(/\r\n/g, "\n")
+            .replace(/\r/g, "\n")
             .replace(/<think>[\s\S]*?<\/think>/gi, "")
             .replace(/<think>[^]*?(?=\{)/gi, "")
             .replace(/```json\s*/gi, "")
             .replace(/```\s*/gi, "")
             .trim();
 
-        const start = clean.indexOf("{");
-        const end = clean.lastIndexOf("}");
-        if (start === -1 || end === -1) return null;
+        let jsonStr = extractJsonObject(clean);
+        if (!jsonStr) return null;
 
-        let jsonStr = clean.slice(start, end + 1);
-
-        jsonStr = jsonStr.replace(/,\s*([}\]])/g, "$1");
         jsonStr = jsonStr.replace(/"<\/([^>]*?)>\s*([},\]])/g, '"$2');
         jsonStr = jsonStr.replace(/<\/[^>]*?>/g, "");
+        jsonStr = stripTrailingCommas(jsonStr);
 
-        let data;
+        let data = null;
         try {
             data = JSON.parse(jsonStr);
         } catch (_) {
-            jsonStr = fixJsonQuotes(jsonStr);
-            data = JSON.parse(jsonStr);
+            try {
+                data = JSON.parse(stripTrailingCommas(sanitizeJsonString(jsonStr)));
+            } catch (_e2) {
+                data = null;
+            }
         }
 
-        if (!Array.isArray(data.choices) || !data.choices.length) return null;
-        return data.choices;
+        if (data && Array.isArray(data.choices) && data.choices.length) {
+            return data.choices;
+        }
+
+        // Основной парсинг не удался целиком — пробуем спасти варианты по одному.
+        const salvaged = salvageChoicesArray(jsonStr);
+        if (salvaged?.length) return salvaged;
+
+        return null;
     } catch (e) {
         console.error(
             `[${MODULE_NAME}] parse error:`,
