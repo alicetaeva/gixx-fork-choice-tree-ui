@@ -857,6 +857,8 @@ Match the tone, language, and intensity of the current scene exactly.
 - Match the writing style of the conversation history
 - The "label" field MUST be a short human-readable name (2-5 words, e.g. "Soft agreement", "Cold refusal", "Bold action", "Unexpected turn")
 - Never leave "label" empty, never write "unidentified", "unknown", or "Option 1"
+- Do not think out loud, do not explain your reasoning, do not add any text before or after the JSON
+- Output the JSON immediately, as compactly as possible
 </rules>
 
 Return ONLY valid JSON, no markdown, no explanations, no preamble:
@@ -1046,6 +1048,8 @@ function extractJsonObject(text) {
 
 /**
  * Разбирает содержимое JSON-массива на отдельные объекты.
+ * Незавершённый (обрезанный) последний объект естественным образом
+ * не попадает в результат, т.к. depth никогда не возвращается к 0.
  */
 function collectTopLevelObjects(text) {
     const objects = [];
@@ -1208,6 +1212,13 @@ function parseIndividualChoices(innerText) {
 
 /**
  * [FIX] Запасной путь: ищем массив вариантов по разным именам полей.
+ *
+ * ВАЖНО: если закрывающей "]" не нашлось (ответ модели был обрезан по
+ * лимиту токенов — частая ситуация для "думающих" моделей вроде GPT-5.x
+ * и Gemini flash-thinking, которые тратят часть бюджета токенов на
+ * невидимые рассуждения), берём весь текст до конца строки.
+ * collectTopLevelObjects() всё равно сам отбросит незавершённый последний
+ * объект — так мы теряем максимум один вариант вместо всех.
  */
 function salvageChoicesArray(jsonStr) {
     // Ищем ключ "choices" (или options/responses/variants, с кавычками и без)
@@ -1240,9 +1251,14 @@ function salvageChoicesArray(jsonStr) {
     if (bracketIdx === -1) return null;
 
     const endIdx = findMatchingBracket(jsonStr, bracketIdx, "[", "]");
-    if (endIdx === -1) return null;
 
-    const inner = jsonStr.slice(bracketIdx + 1, endIdx);
+    // [FIX] Раньше при endIdx === -1 функция возвращала null. Теперь вместо
+    // этого просто берём хвост строки — это и есть починка обрезанного JSON.
+    const inner =
+        endIdx !== -1
+            ? jsonStr.slice(bracketIdx + 1, endIdx)
+            : jsonStr.slice(bracketIdx + 1);
+
     return parseIndividualChoices(inner);
 }
 
@@ -1253,6 +1269,11 @@ function salvageChoicesArray(jsonStr) {
  *  - Различных названий полей (options, responses, variants)
  *  - Моделей, возвращающих Markdown
  *  - Моделей, возвращающих рассуждения перед JSON
+ *  - [НОВОЕ] Обрезанного (truncated) JSON — раньше в этом случае функция
+ *    сразу возвращала null, даже не пытаясь спасти уже сгенерированные
+ *    варианты. Это была главная причина ошибок на "думающих" моделях
+ *    (GPT-5.x, Gemini flash-thinking), которые тратят часть max_tokens на
+ *    скрытые рассуждения и обрезают видимый JSON-ответ на середине.
  */
 function parseChoices(raw) {
     if (!raw?.trim()) return null;
@@ -1275,15 +1296,32 @@ function parseChoices(raw) {
         // Пробуем извлечь JSON-объект
         let jsonStr = extractJsonObject(clean);
 
-        // [FIX] Если объект не найден, может модель вернула просто массив?
+        // Если объект не найден, может модель вернула просто массив?
         if (!jsonStr) {
             const arrayMatch = clean.match(/\[[\s\S]*\]/);
             if (arrayMatch) {
                 jsonStr = arrayMatch[0];
-            } else {
-                console.warn(`[${MODULE_NAME}] No JSON object found in response`);
-                return null;
             }
+        }
+
+        // [FIX] Раньше здесь был безусловный `return null`, если не нашли ни
+        // объект, ни массив с закрывающими скобками. Именно это ломало ответы
+        // от моделей, которые обрезают JSON на середине из-за лимита токенов:
+        // у обрезанного текста нет ни закрывающей "}", ни закрывающей "]",
+        // поэтому обе попытки выше проваливались, и функция сдавалась,
+        // хотя в тексте уже могли быть 2-3 полностью сформированных варианта.
+        // Теперь в этом случае пробуем спасти варианты прямо из "сырого"
+        // текста без требования валидной структуры целиком.
+        if (!jsonStr) {
+            const salvagedFromRaw = salvageChoicesArray(clean);
+            if (salvagedFromRaw?.length) {
+                console.warn(
+                    `[${MODULE_NAME}] Response looked truncated (no closing brackets found), recovered ${salvagedFromRaw.length} choice(s) from partial JSON`,
+                );
+                return salvagedFromRaw;
+            }
+            console.warn(`[${MODULE_NAME}] No JSON object found in response`);
+            return null;
         }
 
         // Убираем Markdown code blocks (если они еще остались)
@@ -1306,7 +1344,7 @@ function parseChoices(raw) {
             }
         }
 
-        // [FIX] Проверяем различные форматы ответа
+        // Проверяем различные форматы ответа
         let choices = null;
 
         if (data) {
@@ -1316,7 +1354,10 @@ function parseChoices(raw) {
                 choices = data.options;
             } else if (Array.isArray(data.responses) && data.responses.length) {
                 choices = data.responses;
-            } else if (Array.isArray(data.variants) && data.options.length) {
+            } else if (Array.isArray(data.variants) && data.variants.length) {
+                // [FIX] была опечатка: проверялось `data.options.length` вместо
+                // `data.variants.length`, что при отсутствии поля "options"
+                // кидало TypeError и обнуляло весь парсинг.
                 choices = data.variants;
             } else if (Array.isArray(data)) {
                 // Модель вернула просто массив вариантов без обертки
@@ -1326,8 +1367,11 @@ function parseChoices(raw) {
 
         if (choices) return choices;
 
-        // Основной парсинг не удался — пробуем спасти варианты по одному
-        const salvaged = salvageChoicesArray(jsonStr);
+        // Основной парсинг не удался (например, JSON обрезан на середине) —
+        // пробуем спасти варианты по одному, даже без закрывающих скобок.
+        // Пробуем и на извлечённом фрагменте, и на полном "сыром" тексте —
+        // на случай если границы фрагмента были определены неточно.
+        const salvaged = salvageChoicesArray(jsonStr) || salvageChoicesArray(clean);
         if (salvaged?.length) return salvaged;
 
         console.warn(`[${MODULE_NAME}] Could not extract choices from parsed data`);
@@ -1343,10 +1387,34 @@ function parseChoices(raw) {
 }
 
 /**
+ * [FIX] Приводит поле content ответа API к строке.
+ * Некоторые OpenAI-совместимые прокси (в т.ч. для Gemini) возвращают
+ * content не строкой, а массивом частей вида [{type:"text", text:"..."}],
+ * из-за чего raw?.trim() в parseChoices падал с TypeError.
+ */
+function extractContentText(content) {
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+        return content
+            .map((part) => (typeof part === "string" ? part : part?.text || ""))
+            .join("");
+    }
+    return content ? JSON.stringify(content) : "";
+}
+
+/**
  * [FIX] Вызов кастомного API.
- *  - Увеличен max_tokens с 1000 до 3000 (иначе JSON обрезается)
+ *  - Увеличен max_tokens с 1000 до 4096 (для "думающих" моделей типа
+ *    GPT-5.x / Gemini flash-thinking, которые тратят часть токенов на
+ *    скрытые рассуждения, 1000-3000 токенов часто не хватает даже на
+ *    рассуждения, не говоря уже о самом JSON-ответе)
  *  - Снижен temperature с 0.9 до 0.7 (для более точного следования инструкциям)
  *  - Добавлена обработка ошибок response.json() (если API вернул HTML)
+ *  - [НОВОЕ] Автоматический повтор запроса с max_completion_tokens вместо
+ *    max_tokens, если провайдер (напр. официальный OpenAI для моделей
+ *    o-серии/gpt-5) вернул ошибку о неподдерживаемом параметре
+ *  - [НОВОЕ] Приведение content к строке, если провайдер вернул массив частей
+ *  - [НОВОЕ] Предупреждение в консоль, если ответ обрезан по finish_reason
  */
 async function callCustomApi(prompt) {
     const s = getSettings();
@@ -1359,36 +1427,59 @@ async function callCustomApi(prompt) {
     const modelFromSelect = sel?.style.display !== "none" ? sel?.value : null;
     const model = modelFromSelect || s.apiModel || "gpt-4o-mini";
 
-    let response;
-    try {
-        response = await fetch(endpoint, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${s.apiKey}`,
-            },
-            body: JSON.stringify({
-                model: model,
-                messages: [{ role: "user", content: prompt }],
-                temperature: 0.7,   // [FIX] снижено с 0.9
-                max_tokens: 3000,   // [FIX] увеличено с 1000
-                stream: false,      // явно отключаем streaming
-            }),
-        });
-    } catch (err) {
-        throw new Error(`Network error: ${err.message}`);
+    const MAX_TOKENS = 4096; // [FIX] было 1000, потом 3000 — всё ещё мало для reasoning-моделей
+
+    async function doFetch(body) {
+        let resp;
+        try {
+            resp = await fetch(endpoint, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${s.apiKey}`,
+                },
+                body: JSON.stringify(body),
+            });
+        } catch (err) {
+            throw new Error(`Network error: ${err.message}`);
+        }
+
+        let json;
+        try {
+            json = await resp.json();
+        } catch (parseErr) {
+            const text = await resp.text().catch(() => "");
+            throw new Error(
+                `Invalid JSON response (HTTP ${resp.status}): ${text.slice(0, 200)}`,
+            );
+        }
+        return { resp, json };
     }
 
-    // [FIX] Обрабатываем случай, когда API вернул не JSON (например, HTML-страницу ошибки)
-    let data;
-    try {
-        data = await response.json();
-    } catch (parseErr) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`Invalid JSON response (HTTP ${response.status}): ${text.slice(0, 200)}`);
+    const baseBody = {
+        model,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.7,
+        stream: false,
+    };
+
+    let { resp: response, json: data } = await doFetch({
+        ...baseBody,
+        max_tokens: MAX_TOKENS,
+    });
+
+    // [FIX] Некоторые провайдеры (в т.ч. официальный OpenAI для новых
+    // reasoning-моделей) требуют "max_completion_tokens" вместо "max_tokens"
+    // и отвечают ошибкой 400. Автоматически повторяем запрос правильным полем.
+    const errMsg = data?.error?.message || "";
+    if (data?.error && /max_tokens/i.test(errMsg) && /max_completion_tokens/i.test(errMsg)) {
+        ({ resp: response, json: data } = await doFetch({
+            ...baseBody,
+            max_completion_tokens: MAX_TOKENS,
+        }));
     }
 
-    if (data.error) {
+    if (data?.error) {
         const msg = data.error.message || JSON.stringify(data.error);
         throw new Error(`API error: ${msg}`);
     }
@@ -1397,7 +1488,17 @@ async function callCustomApi(prompt) {
         throw new Error(`HTTP ${response.status}: ${JSON.stringify(data).slice(0, 200)}`);
     }
 
-    return data.choices?.[0]?.message?.content || null;
+    const choice = data.choices?.[0];
+
+    if (choice?.finish_reason === "length") {
+        console.warn(
+            `[${MODULE_NAME}] Response was truncated by the token limit (finish_reason=length). ` +
+            `If choices keep getting cut off, this is likely a "thinking" model spending its ` +
+            `token budget on hidden reasoning — consider raising max_tokens further.`,
+        );
+    }
+
+    return extractContentText(choice?.message?.content) || null;
 }
 
 async function generateChoices() {
@@ -1450,7 +1551,11 @@ async function generateChoices() {
 
         if (!result) {
             hideLoader();
-            toastr.warning("Пустой ответ от модели");
+            toastr.warning(
+                "Пустой ответ от модели. Если это \"думающая\" модель (GPT-5.x, Gemini flash-thinking) — " +
+                "возможно, весь лимит токенов ушёл на скрытые рассуждения. Попробуйте увеличить лимит токенов " +
+                "в настройках API или уменьшить количество вариантов.",
+            );
             return;
         }
 
@@ -1459,6 +1564,14 @@ async function generateChoices() {
 
         const rawChoices = parseChoices(result);
         if (rawChoices?.length) {
+            if (rawChoices.length < s.maxChoices) {
+                // [НОВОЕ] Явно сообщаем, если удалось спасти не все варианты —
+                // обычно это значит, что ответ модели был обрезан по лимиту токенов.
+                toastr.info(
+                    `Получено ${rawChoices.length} из ${s.maxChoices} вариантов — похоже, ответ модели ` +
+                    `был обрезан. Попробуйте увеличить лимит токенов в настройках API или уменьшить число вариантов.`,
+                );
+            }
             const choices = rawChoices.map((c, i) =>
                 normalizeChoice(c, i, activePresetArchetypes),
             );
