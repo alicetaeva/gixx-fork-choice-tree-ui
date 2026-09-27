@@ -878,7 +878,7 @@ Match the tone, language and intensity of the current scene exactly.
 - The "label" field MUST be a short human-readable name (never leave it empty, never write "unidentified" or "unknown")
 </rules>
 
-Return ONLY raw JSON, no markdown:
+Return ONLY raw JSON, no markdown, no commentary before or after the JSON, no explanations:
 {"choices":[
     {{json_template}}
 ]}`;
@@ -983,17 +983,34 @@ function findMatchingBracket(text, startIdx, openCh, closeCh) {
 
 /**
  * Вырезает первый полноценный JSON-объект { ... } из произвольного текста,
- * корректно считая вложенные скобки и игнорируя { } внутри строковых
- * значений (например, если модель написала "текст с { фигурной скобкой }").
- * Это надёжнее, чем indexOf("{") + lastIndexOf("}"), которые ломаются,
- * если после JSON идёт ещё какой-то текст модели с собственными скобками.
+ * стараясь "прицелиться" именно на объект, содержащий ключ "choices".
+ *
+ * РАНЬШЕ здесь бралась просто самая первая "{" во всём тексте
+ * (text.indexOf("{")). Это ломалось на моделях, которые перед JSON пишут
+ * пояснения/рассуждения ("Хорошо, вот 4 варианта в формате {...}:") —
+ * если в этой преамбуле случайно встречается фигурная скобка (что у
+ * "болтливых"/reasoning-моделей вроде GPT/Gemini бывает намного чаще,
+ * чем у Sonnet), старый код принимал её за начало JSON: либо не находил
+ * для неё пару и весь парсинг падал, либо вырезал кусок обычного текста,
+ * который JSON-ом не является.
+ *
+ * Теперь перебираются ВСЕ "{" в тексте по порядку, и берётся первая, чей
+ * сбалансированный блок реально содержит "choices" (если такой ключ вообще
+ * есть в ответе) — так посторонние скобки в преамбуле игнорируются.
  */
 function extractJsonObject(text) {
-    const start = text.indexOf("{");
-    if (start === -1) return null;
-    const end = findMatchingBracket(text, start, "{", "}");
-    if (end === -1) return null;
-    return text.slice(start, end + 1);
+    const anchorPresent = text.includes('"choices"');
+
+    for (let i = 0; i < text.length; i++) {
+        if (text[i] !== "{") continue;
+        const end = findMatchingBracket(text, i, "{", "}");
+        if (end === -1) continue;
+        const slice = text.slice(i, end + 1);
+        if (!anchorPresent || slice.includes('"choices"')) {
+            return slice;
+        }
+    }
+    return null;
 }
 
 /**
@@ -1152,6 +1169,12 @@ const stripTrailingCommas = (s) => s.replace(/,\s*([}\]])/g, "$1");
  * вытащить массив "choices" и распарсить каждый вариант ПО ОТДЕЛЬНОСТИ.
  * Так один сломанный вариант (например, из-за экзотического форматирования
  * от конкретной модели) не обнуляет остальные три.
+ *
+ * Также переживает ОБРЕЗАННЫЙ ответ (модель упёрлась в лимит токенов и
+ * массив "choices" не был закрыт "]"): в этом случае просто берём весь
+ * хвост текста как "внутренность" массива — collectTopLevelObjects сам
+ * отбросит последний недописанный объект и сохранит те варианты, которые
+ * модель успела дописать полностью.
  */
 function salvageChoicesArray(jsonStr) {
     const keyIdx = jsonStr.indexOf('"choices"');
@@ -1161,9 +1184,10 @@ function salvageChoicesArray(jsonStr) {
     if (bracketIdx === -1) return null;
 
     const endIdx = findMatchingBracket(jsonStr, bracketIdx, "[", "]");
-    if (endIdx === -1) return null;
-
-    const inner = jsonStr.slice(bracketIdx + 1, endIdx);
+    const inner =
+        endIdx === -1
+            ? jsonStr.slice(bracketIdx + 1) // ответ обрезан — берём до конца
+            : jsonStr.slice(bracketIdx + 1, endIdx);
     const objStrings = collectTopLevelObjects(inner);
 
     const results = [];
@@ -1189,39 +1213,65 @@ function parseChoices(raw) {
     if (!raw?.trim()) return null;
     try {
         let clean = raw
+            .replace(/^\uFEFF/, "") // BOM, который иногда добавляют некоторые API
             .replace(/\r\n/g, "\n")
             .replace(/\r/g, "\n")
-            .replace(/<think>[\s\S]*?<\/think>/gi, "")
-            .replace(/<think>[^]*?(?=\{)/gi, "")
+            // Разные модели заворачивают "мысли" в разные теги, не только
+            // <think> (конвенция Claude/DeepSeek) — GPT/Gemini-подобные
+            // reasoning-модели нередко используют <thinking>, <reasoning>
+            // или <analysis>. Если такой блок не вырезать, случайная "{"
+            // внутри рассуждений может обмануть extractJsonObject.
+            .replace(/<(think|thinking|reasoning|analysis)>[\s\S]*?<\/\1>/gi, "")
+            .replace(/<(?:think|thinking|reasoning|analysis)>[^]*?(?=\{)/gi, "")
             .replace(/```json\s*/gi, "")
             .replace(/```\s*/gi, "")
+            // "Умные"/типографские кавычки, которые некоторые модели иногда
+            // подставляют вместо обычных прямых, ломают JSON-разделители
+            // строк — приводим их к обычным ASCII-кавычкам.
+            .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+            .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
             .trim();
 
         let jsonStr = extractJsonObject(clean);
-        if (!jsonStr) return null;
 
-        jsonStr = jsonStr.replace(/"<\/([^>]*?)>\s*([},\]])/g, '"$2');
-        jsonStr = jsonStr.replace(/<\/[^>]*?>/g, "");
-        jsonStr = stripTrailingCommas(jsonStr);
+        if (jsonStr) {
+            jsonStr = jsonStr.replace(/"<\/([^>]*?)>\s*([},\]])/g, '"$2');
+            jsonStr = jsonStr.replace(/<\/[^>]*?>/g, "");
+            jsonStr = stripTrailingCommas(jsonStr);
 
-        let data = null;
-        try {
-            data = JSON.parse(jsonStr);
-        } catch (_) {
+            let data = null;
             try {
-                data = JSON.parse(stripTrailingCommas(sanitizeJsonString(jsonStr)));
-            } catch (_e2) {
-                data = null;
+                data = JSON.parse(jsonStr);
+            } catch (_) {
+                try {
+                    data = JSON.parse(stripTrailingCommas(sanitizeJsonString(jsonStr)));
+                } catch (_e2) {
+                    data = null;
+                }
             }
+
+            if (data && Array.isArray(data.choices) && data.choices.length) {
+                return data.choices;
+            }
+
+            // Основной парсинг не удался целиком — пробуем спасти варианты по одному.
+            const salvaged = salvageChoicesArray(jsonStr);
+            if (salvaged?.length) return salvaged;
         }
 
-        if (data && Array.isArray(data.choices) && data.choices.length) {
-            return data.choices;
+        // Последний рубеж. Если extractJsonObject вообще не нашёл пару
+        // скобок — самая частая причина в том, что ответ модели ОБРЕЗАН
+        // лимитом токенов до того, как JSON был дописан до конца (особенно
+        // актуально для более "многословных" моделей). Берём весь текст от
+        // первой "{" и пытаемся спасти хотя бы полностью дописанные варианты.
+        const rawStart = clean.indexOf("{");
+        if (rawStart !== -1) {
+            const rawSlice = clean.slice(rawStart);
+            const salvagedRaw =
+                salvageChoicesArray(rawSlice) ||
+                salvageChoicesArray(sanitizeJsonString(rawSlice));
+            if (salvagedRaw?.length) return salvagedRaw;
         }
-
-        // Основной парсинг не удался целиком — пробуем спасти варианты по одному.
-        const salvaged = salvageChoicesArray(jsonStr);
-        if (salvaged?.length) return salvaged;
 
         return null;
     } catch (e) {
@@ -1255,7 +1305,12 @@ async function callCustomApi(prompt) {
             model: model,
             messages: [{ role: "user", content: prompt }],
             temperature: 0.9,
-            max_tokens: 1000,
+            // Некоторые модели (особенно "многословные"/reasoning-варианты
+            // вроде GPT-5.x или Gemini flash) заметно длиннее укладывают
+            // 4 варианта + JSON-обвязку, чем Claude, и на 1000 токенах
+            // ответ обрывался ДО закрывающей "}", из-за чего парсинг падал
+            // целиком. Увеличено, чтобы дать запас на завершение JSON.
+            max_tokens: 2000,
         }),
     });
 
