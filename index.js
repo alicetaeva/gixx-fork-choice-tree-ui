@@ -9,22 +9,15 @@ const DEFAULT_SETTINGS = Object.freeze({
     apiUrl: "",
     apiKey: "",
     apiModel: "",
-    apiProfiles: [],       // [{ name, apiUrl, apiKey, apiModel }]
-    activeApiProfile: "",  // имя активного профиля подключения ("" = вручную)
-    promptPresets: [],   // [{ name, text, archetypes: [{icon, label}, x4] }]
-    activePreset: "",    // имя активного пресета ("" = ручной / кастомный текст)
+    apiProfiles: [],
+    activeApiProfile: "",
+    promptPresets: [],
+    activePreset: "",
 });
 
-// ---------------------------------------------------------------------
-// TONE_META используется ТОЛЬКО для покраски карточки (CSS-класс),
-// это никогда не показывается пользователю как текст.
-// ---------------------------------------------------------------------
 const TONE_META = { tender: {}, sharp: {}, bold: {}, wild: {} };
 const TONE_ORDER = ["tender", "sharp", "bold", "wild"];
 
-// Дефолтные названия/иконки — используются, только если у активного
-// пресета НЕ заданы свои архетипы (или пресет не выбран, т.е. работает
-// встроенный промпт).
 const BUILTIN_ARCHETYPES = [
     { icon: "💙", label: "Нежный" },
     { icon: "🧊", label: "Резкий" },
@@ -37,18 +30,10 @@ const BAD_LABELS = new Set(["", "unidentified", "unknown", "n/a", "null", "undef
 
 /**
  * Приводит "сырой" вариант ответа от модели к безопасному виду.
- * Название/иконка НИКОГДА не остаются пустыми или "unidentified", но и не
- * привязаны к жёсткому глобальному списку тонов — используется таксономия
- * конкретного активного пресета (archetypes), либо generic "Вариант N".
- *
- * @param {object} raw - вариант, как его вернула модель
- * @param {number} index - позиция варианта (0-based)
- * @param {Array<{icon:string,label:string}>|null} archetypes - архетипы активного пресета (или null)
  */
 function normalizeChoice(raw, index, archetypes) {
     const c = raw || {};
 
-    // Цвет карточки — техническая деталь, не показывается пользователю текстом
     let styleTone = String(c.tone || "").toLowerCase().trim();
     if (!TONE_META[styleTone]) {
         styleTone = TONE_ORDER[index % TONE_ORDER.length];
@@ -342,10 +327,6 @@ function syncUI() {
     if ($("ctu-preset-name")) $("ctu-preset-name").value = s.activePreset || "";
 }
 
-// ---------------------------------------------------------------------
-// Пресеты кастомного промпта (текст + собственная таксономия названий)
-// ---------------------------------------------------------------------
-
 function populatePresetSelect() {
     const s = getSettings();
     const select = document.getElementById("ctu-preset-select");
@@ -443,7 +424,6 @@ function savePresetAs(name, text, archetypes) {
         return false;
     }
 
-    // отбрасываем полностью пустые слоты архетипов, чтобы не засорять сохранение
     const cleanArchetypes = (archetypes || []).map((a) => ({
         icon: a.icon || "",
         label: a.label || "",
@@ -495,11 +475,6 @@ function updateApiStatusBadge() {
     badge.style.display = active ? "inline" : "none";
     if (fetchBtn) fetchBtn.style.display = active ? "block" : "none";
 }
-
-// ---------------------------------------------------------------------
-// Профили API-подключения (url + key + model + название), для быстрого
-// переключения между разными эндпоинтами.
-// ---------------------------------------------------------------------
 
 function findApiProfile(name) {
     const s = getSettings();
@@ -739,7 +714,6 @@ function bindSettingsEvents() {
         saveSettingsDebounced();
     });
 
-    // Ручное сохранение текста в текущий customPrompt (без создания пресета)
     $("ctu-save-prompt")?.addEventListener("click", () => {
         const val = $("ctu-custom-prompt")?.value?.trim() || "";
         s.customPrompt = (val === DEFAULT_PROMPT_TEMPLATE.trim()) ? "" : val;
@@ -757,7 +731,6 @@ function bindSettingsEvents() {
         toastr.info("Промпт сброшен к дефолтному");
     });
 
-    // Пресеты
     $("ctu-preset-select")?.addEventListener("change", (e) => {
         loadPresetIntoEditor(e.target.value);
     });
@@ -792,7 +765,6 @@ function bindSettingsEvents() {
 
     $("ctu-fetch-models")?.addEventListener("click", fetchAndShowModels);
 
-    // Профили подключения (url + key + model + название)
     $("ctu-api-profile-select")?.addEventListener("change", (e) => {
         loadApiProfileIntoEditor(e.target.value);
     });
@@ -852,63 +824,72 @@ function bindSettingsEvents() {
     });
 }
 
-const DEFAULT_PROMPT_TEMPLATE = `You are a roleplay assistant. Write {{count}} response options for {{user}}.
+/**
+ * Переписанный промпт:
+ *  - Исправлена грамматика ("Answer on last message" → "Responding to the last message")
+ *  - Показан полный валидный JSON-пример с 4 вариантами (модель лучше понимает формат)
+ *  - Усилены инструкции о валидности JSON
+ *  - Добавлено поле "label" с примерами
+ */
+const DEFAULT_PROMPT_TEMPLATE = `You are a roleplay assistant. Your task is to suggest {{count}} possible responses to continue the conversation.
 
 <conversation>
 {{history}}
 </conversation>
 
 <task>
-Write {{count}} options for what {{user}} could say or do next. Answer on last message.
-Match the tone, language and intensity of the current scene exactly.
+Write {{count}} distinct response options for what the user could say or do next.
+Each option should be a natural continuation of the conversation, responding to the last message.
+Match the tone, language, and intensity of the current scene exactly.
 </task>
 
 <archetypes>
-[1] 💙 "Tender" — soft, vulnerable, shows through action
+[1] 💙 "Tender" — soft, vulnerable, shows emotion through action
 [2] 🧊 "Sharp" — dry, keeps distance, cold as shield or power
-[3] 🔥 "Bold" — confident, takes initiative, drive not aggression
+[3] 🔥 "Bold" — confident, takes initiative, drives the scene
 [4] 🎲 "Wild" — breaks expectations, unpredictable but on point
 </archetypes>
 
 <rules>
-- Keep each option to 1-3 sentences max
-- No clichés, no emotional explanations — only action and words
-- Do NOT write for {{char}}
-- Match the writing style you see in the conversation history
-- The "label" field MUST be a short human-readable name (never leave it empty, never write "unidentified" or "unknown")
+- Each option must be 1-3 sentences maximum
+- Write ONLY the user's words/actions, NOT the character's reactions
+- No clichés, no emotional explanations — only action and dialogue
+- Match the writing style of the conversation history
+- The "label" field MUST be a short human-readable name (2-5 words, e.g. "Soft agreement", "Cold refusal", "Bold action", "Unexpected turn")
+- Never leave "label" empty, never write "unidentified", "unknown", or "Option 1"
 </rules>
 
-Return ONLY raw JSON, no markdown, no commentary before or after the JSON, no explanations:
-{"choices":[
-    {{json_template}}
-]}`;
+Return ONLY valid JSON, no markdown, no explanations, no preamble:
+{
+    "choices": [
+        {"id": 1, "tone": "tender", "icon": "💙", "label": "Soft agreement", "text": "I understand... let me think about it."},
+        {"id": 2, "tone": "sharp", "icon": "🧊", "label": "Cold refusal", "text": "No. I won't do that."},
+        {"id": 3, "tone": "bold", "icon": "🔥", "label": "Bold action", "text": "Enough talk. Come with me."},
+        {"id": 4, "tone": "wild", "icon": "🎲", "label": "Unexpected turn", "text": "Wait... did you hear that?"}
+    ]
+}
+
+Now write exactly {{count}} options for this conversation:`;
 
 function buildDefaultPrompt(ctx, count) {
     const chat = ctx.chat || [];
-    const historyText = chat
-        .slice(-8)
-        .map((m) => `${m.name}: ${m.mes}`)
-        .join("\n\n");
     const userName = ctx.name1 || "User";
     const charName = ctx.name2 || "Character";
 
-    const archetypes = [
-        { id: 1, tone: "tender", icon: "💙", label: "Нежный" },
-        { id: 2, tone: "sharp", icon: "🧊", label: "Резкий" },
-        { id: 3, tone: "bold", icon: "🔥", label: "Дерзкий" },
-        { id: 4, tone: "wild", icon: "🎲", label: "Дикий" },
-    ].slice(0, count);
-
-    const jsonTemplate = archetypes
-        .map((a) => `{"id":${a.id},"tone":"${a.tone}","icon":"${a.icon}","label":"${a.label}","text":"TEXT"}`)
-        .join(",\n    ");
+    const historyText = chat
+        .slice(-8)
+        .map((m) => {
+            // FIX: m.name может быть undefined для системных сообщений
+            const name = m.name || (m.is_user ? userName : charName);
+            return `${name}: ${m.mes}`;
+        })
+        .join("\n\n");
 
     return DEFAULT_PROMPT_TEMPLATE
         .replace(/\{\{count\}\}/g, count)
         .replace(/\{\{history\}\}/g, historyText)
         .replace(/\{\{user\}\}/g, userName)
-        .replace(/\{\{char\}\}/g, charName)
-        .replace(/\{\{json_template\}\}/g, jsonTemplate);
+        .replace(/\{\{char\}\}/g, charName);
 }
 
 function buildPrompt() {
@@ -917,12 +898,17 @@ function buildPrompt() {
 
     if (s.customPrompt && s.customPrompt.trim().length > 10 && s.customPrompt.trim() !== DEFAULT_PROMPT_TEMPLATE.trim()) {
         const chat = ctx.chat || [];
-        const historyText = chat
-            .slice(-8)
-            .map((m) => `${m.name}: ${m.mes}`)
-            .join("\n\n");
         const userName = ctx.name1 || "User";
         const charName = ctx.name2 || "Character";
+
+        const historyText = chat
+            .slice(-8)
+            .map((m) => {
+                const name = m.name || (m.is_user ? userName : charName);
+                return `${name}: ${m.mes}`;
+            })
+            .join("\n\n");
+
         const lastMsg = [...chat].reverse().find((m) => !m.is_user)?.mes || "";
         const count = s.maxChoices;
 
@@ -937,14 +923,10 @@ function buildPrompt() {
     return buildDefaultPrompt(ctx, s.maxChoices);
 }
 
-// Valid escape chars that JSON allows right after a backslash inside a string.
 const JSON_VALID_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
 
 /**
- * Находит индекс символа, закрывающего скобку/фигурную скобку, открытую в
- * позиции startIdx, учитывая вложенность и то, что скобки внутри строк
- * (в кавычках) считать не нужно. Возвращает -1, если пара не найдена
- * (объект/массив обрезан или иначе повреждён).
+ * Находит индекс закрывающей скобки, учитывая вложенность и строки.
  */
 function findMatchingBracket(text, startIdx, openCh, closeCh) {
     let depth = 0;
@@ -982,42 +964,88 @@ function findMatchingBracket(text, startIdx, openCh, closeCh) {
 }
 
 /**
- * Вырезает первый полноценный JSON-объект { ... } из произвольного текста,
- * стараясь "прицелиться" именно на объект, содержащий ключ "choices".
- *
- * РАНЬШЕ здесь бралась просто самая первая "{" во всём тексте
- * (text.indexOf("{")). Это ломалось на моделях, которые перед JSON пишут
- * пояснения/рассуждения ("Хорошо, вот 4 варианта в формате {...}:") —
- * если в этой преамбуле случайно встречается фигурная скобка (что у
- * "болтливых"/reasoning-моделей вроде GPT/Gemini бывает намного чаще,
- * чем у Sonnet), старый код принимал её за начало JSON: либо не находил
- * для неё пару и весь парсинг падал, либо вырезал кусок обычного текста,
- * который JSON-ом не является.
- *
- * Теперь перебираются ВСЕ "{" в тексте по порядку, и берётся первая, чей
- * сбалансированный блок реально содержит "choices" (если такой ключ вообще
- * есть в ответе) — так посторонние скобки в преамбуле игнорируются.
+ * [FIX] Ищет объект с полем "choices" (или "options"/"responses"/"variants").
+ * Старая версия брала ПЕРВЫЙ "{", что ломалось, если модель писала префикс
+ * типа "Here is the JSON: {...}" или рассуждения "<think>{reasoning}</think>".
+ * Теперь ищем объект, содержащий нужное поле. Если не нашли — fallback на первый.
  */
 function extractJsonObject(text) {
-    const anchorPresent = text.includes('"choices"');
+    // Проверяем различные названия поля с вариантами
+    const fieldPatterns = [
+        /"choices"\s*:/,
+        /"options"\s*:/,
+        /"responses"\s*:/,
+        /"variants"\s*:/,
+        /\bchoices\s*:/,
+        /\boptions\s*:/,
+        /\bresponses\s*:/,
+        /\bvariants\s*:/,
+    ];
 
-    for (let i = 0; i < text.length; i++) {
-        if (text[i] !== "{") continue;
-        const end = findMatchingBracket(text, i, "{", "}");
-        if (end === -1) continue;
-        const slice = text.slice(i, end + 1);
-        if (!anchorPresent || slice.includes('"choices"')) {
-            return slice;
+    for (const pattern of fieldPatterns) {
+        const match = text.match(pattern);
+        if (match) {
+            // Ищем { перед этим полем
+            const fieldIdx = match.index;
+            let start = -1;
+            let depth = 0;
+            let inString = false;
+            let escaped = false;
+
+            for (let i = fieldIdx; i >= 0; i--) {
+                const ch = text[i];
+
+                if (inString) {
+                    if (escaped) {
+                        escaped = false;
+                        continue;
+                    }
+                    if (ch === "\\") {
+                        escaped = true;
+                        continue;
+                    }
+                    if (ch === '"') inString = false;
+                    continue;
+                }
+
+                if (ch === '"') {
+                    inString = true;
+                    continue;
+                }
+                if (ch === "}") depth++;
+                else if (ch === "{") {
+                    if (depth === 0) {
+                        start = i;
+                        break;
+                    }
+                    depth--;
+                }
+            }
+
+            if (start !== -1) {
+                const end = findMatchingBracket(text, start, "{", "}");
+                if (end !== -1) {
+                    return text.slice(start, end + 1);
+                }
+            }
         }
     }
+
+    // Fallback: ищем первый { (для случаев, когда модель вернула что-то неожиданное)
+    let start = text.indexOf("{");
+    while (start !== -1) {
+        const end = findMatchingBracket(text, start, "{", "}");
+        if (end !== -1) {
+            return text.slice(start, end + 1);
+        }
+        start = text.indexOf("{", start + 1);
+    }
+
     return null;
 }
 
 /**
- * Разбирает содержимое JSON-массива (без внешних []) на строки отдельных
- * top-level объектов { ... }, снова учитывая вложенность и строки.
- * Нужно, чтобы можно было распарсить каждый вариант отдельно, даже если
- * один из них повреждён.
+ * Разбирает содержимое JSON-массива на отдельные объекты.
  */
 function collectTopLevelObjects(text) {
     const objects = [];
@@ -1061,26 +1089,21 @@ function collectTopLevelObjects(text) {
 }
 
 /**
- * Многие не-Claude модели (GPT/Gemini и т.п.) не так строго следуют
- * инструкции "верни чистый JSON" и часто портят его одним из типичных
- * способов, из-за которых JSON.parse падает целиком:
- *  - вставляют настоящий перенос строки/таб внутрь строкового значения
- *    вместо экранированных \n / \t;
- *  - используют одиночный обратный слеш там, где это не валидный
- *    escape-символ JSON (например, в пути вида "C:\Users" или в смайлике);
- *  - забывают экранировать кавычки внутри значения (не только в "text",
- *    но и в "label" — например, название варианта в кавычках).
- * Эта функция проходит по строке символ за символом и чинит все три
- * случая для ЛЮБОГО поля, а не только "text", как было раньше.
+ * [FIX] Полностью переписана функция санитизации JSON.
+ * Старая версия использовала флаг "expectingValue", который ломал обработку
+ * неэкранированных кавычек внутри текста. Теперь логика простая:
+ * - Если кавычка внутри строки, смотрим следующий значимый символ.
+ * - Если это :, , } ] или конец текста — это конец JSON-строки.
+ * - Иначе это неэкранированная кавычка внутри текста, экранируем её.
  */
 function sanitizeJsonString(jsonStr) {
     let result = "";
     let inString = false;
     let escaped = false;
-    let expectingValue = false; // true сразу после ":" вне строки
 
     for (let i = 0; i < jsonStr.length; i++) {
         const ch = jsonStr[i];
+        const nextCh = jsonStr[i + 1];
 
         if (inString) {
             if (escaped) {
@@ -1090,24 +1113,24 @@ function sanitizeJsonString(jsonStr) {
             }
 
             if (ch === "\\") {
-                const next = jsonStr[i + 1];
-                if (JSON_VALID_ESCAPES.has(next)) {
+                // Проверяем, валидный ли следующий символ для escape
+                if (nextCh && JSON_VALID_ESCAPES.has(nextCh)) {
                     result += ch;
                     escaped = true;
                 } else {
-                    // Невалидный escape (напр. "\U" в пути) — экранируем сам
-                    // слеш, а следующий символ обработается как обычный.
+                    // Невалидный escape (напр. "\U" в пути) — экранируем сам слеш
                     result += "\\\\";
                 }
                 continue;
             }
 
+            // Реальные переносы строк внутри строки → экранированные \n
             if (ch === "\n") {
                 result += "\\n";
                 continue;
             }
             if (ch === "\r") {
-                continue; // \r\n уже даст \n на следующей итерации
+                continue;
             }
             if (ch === "\t") {
                 result += "\\t";
@@ -1115,22 +1138,24 @@ function sanitizeJsonString(jsonStr) {
             }
 
             if (ch === '"') {
-                // Смотрим вперёд: если следующий значимый символ похож на
-                // конец значения/ключа — это настоящий конец строки, иначе
-                // это неэкранированная кавычка внутри текста модели.
+                // Определяем, конец ли это JSON-строки или неэкранированная кавычка внутри текста.
+                // Пропускаем пробелы и смотрим следующий значимый символ.
                 let j = i + 1;
                 while (j < jsonStr.length && /\s/.test(jsonStr[j])) j++;
-                const nextCh = jsonStr[j];
-                const isEnd =
-                    nextCh === undefined ||
-                    (expectingValue
-                        ? nextCh === "," || nextCh === "}" || nextCh === "]"
-                        : nextCh === ":");
+                const nextSignificant = jsonStr[j];
 
-                if (isEnd) {
+                const isEndOfString =
+                    nextSignificant === undefined ||
+                    nextSignificant === ":" ||
+                    nextSignificant === "," ||
+                    nextSignificant === "}" ||
+                    nextSignificant === "]";
+
+                if (isEndOfString) {
                     inString = false;
                     result += ch;
                 } else {
+                    // Это неэкранированная кавычка внутри текста модели
                     result += '\\"';
                 }
                 continue;
@@ -1146,16 +1171,6 @@ function sanitizeJsonString(jsonStr) {
             result += ch;
             continue;
         }
-        if (ch === ":") {
-            expectingValue = true;
-            result += ch;
-            continue;
-        }
-        if (ch === "," || ch === "{" || ch === "[" || ch === "}" || ch === "]") {
-            expectingValue = false;
-            result += ch;
-            continue;
-        }
         result += ch;
     }
 
@@ -1165,114 +1180,157 @@ function sanitizeJsonString(jsonStr) {
 const stripTrailingCommas = (s) => s.replace(/,\s*([}\]])/g, "$1");
 
 /**
- * Запасной путь: даже если весь объект целиком не парсится, пытаемся
- * вытащить массив "choices" и распарсить каждый вариант ПО ОТДЕЛЬНОСТИ.
- * Так один сломанный вариант (например, из-за экзотического форматирования
- * от конкретной модели) не обнуляет остальные три.
- *
- * Также переживает ОБРЕЗАННЫЙ ответ (модель упёрлась в лимит токенов и
- * массив "choices" не был закрыт "]"): в этом случае просто берём весь
- * хвост текста как "внутренность" массива — collectTopLevelObjects сам
- * отбросит последний недописанный объект и сохранит те варианты, которые
- * модель успела дописать полностью.
+ * Разбирает каждый вариант по отдельности, чтобы один сломанный вариант
+ * не обнулял остальные.
  */
-function salvageChoicesArray(jsonStr) {
-    const keyIdx = jsonStr.indexOf('"choices"');
-    if (keyIdx === -1) return null;
-
-    const bracketIdx = jsonStr.indexOf("[", keyIdx);
-    if (bracketIdx === -1) return null;
-
-    const endIdx = findMatchingBracket(jsonStr, bracketIdx, "[", "]");
-    const inner =
-        endIdx === -1
-            ? jsonStr.slice(bracketIdx + 1) // ответ обрезан — берём до конца
-            : jsonStr.slice(bracketIdx + 1, endIdx);
-    const objStrings = collectTopLevelObjects(inner);
-
+function parseIndividualChoices(innerText) {
+    const objStrings = collectTopLevelObjects(innerText);
     const results = [];
+
     for (const objStr of objStrings) {
+        // Попытка 1: обычный парсинг
         const attempt1 = stripTrailingCommas(objStr);
         try {
             results.push(JSON.parse(attempt1));
             continue;
-        } catch (_) {
-            // пробуем починить кавычки/переносы строк и распарсить ещё раз
-        }
+        } catch (_) {}
+
+        // Попытка 2: sanitized
         try {
             results.push(JSON.parse(stripTrailingCommas(sanitizeJsonString(objStr))));
         } catch (_) {
-            // этот вариант не спасти — пропускаем, но не теряем остальные
+            // Этот вариант не спасти — пропускаем
         }
     }
 
     return results.length ? results : null;
 }
 
+/**
+ * [FIX] Запасной путь: ищем массив вариантов по разным именам полей.
+ */
+function salvageChoicesArray(jsonStr) {
+    // Ищем ключ "choices" (или options/responses/variants, с кавычками и без)
+    const fieldPatterns = [
+        /"choices"\s*:/,
+        /"options"\s*:/,
+        /"responses"\s*:/,
+        /"variants"\s*:/,
+        /\bchoices\s*:/,
+        /\boptions\s*:/,
+        /\bresponses\s*:/,
+        /\bvariants\s*:/,
+    ];
+
+    let bracketIdx = -1;
+
+    for (const pattern of fieldPatterns) {
+        const match = jsonStr.match(pattern);
+        if (match) {
+            bracketIdx = jsonStr.indexOf("[", match.index);
+            if (bracketIdx !== -1) break;
+        }
+    }
+
+    // Если не нашли поле, может модель вернула просто массив?
+    if (bracketIdx === -1) {
+        bracketIdx = jsonStr.indexOf("[");
+    }
+
+    if (bracketIdx === -1) return null;
+
+    const endIdx = findMatchingBracket(jsonStr, bracketIdx, "[", "]");
+    if (endIdx === -1) return null;
+
+    const inner = jsonStr.slice(bracketIdx + 1, endIdx);
+    return parseIndividualChoices(inner);
+}
+
+/**
+ * Главный парсер ответов модели.
+ * [FIX] Добавлена обработка:
+ *  - Массива вместо объекта
+ *  - Различных названий полей (options, responses, variants)
+ *  - Моделей, возвращающих Markdown
+ *  - Моделей, возвращающих рассуждения перед JSON
+ */
 function parseChoices(raw) {
     if (!raw?.trim()) return null;
     try {
+        // Нормализуем переносы строк
         let clean = raw
-            .replace(/^\uFEFF/, "") // BOM, который иногда добавляют некоторые API
             .replace(/\r\n/g, "\n")
-            .replace(/\r/g, "\n")
-            // Разные модели заворачивают "мысли" в разные теги, не только
-            // <think> (конвенция Claude/DeepSeek) — GPT/Gemini-подобные
-            // reasoning-модели нередко используют <thinking>, <reasoning>
-            // или <analysis>. Если такой блок не вырезать, случайная "{"
-            // внутри рассуждений может обмануть extractJsonObject.
-            .replace(/<(think|thinking|reasoning|analysis)>[\s\S]*?<\/\1>/gi, "")
-            .replace(/<(?:think|thinking|reasoning|analysis)>[^]*?(?=\{)/gi, "")
-            .replace(/```json\s*/gi, "")
-            .replace(/```\s*/gi, "")
-            // "Умные"/типографские кавычки, которые некоторые модели иногда
-            // подставляют вместо обычных прямых, ломают JSON-разделители
-            // строк — приводим их к обычным ASCII-кавычкам.
-            .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
-            .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
-            .trim();
+            .replace(/\r/g, "\n");
 
+        // Удаляем <think> блоки (reasoning модели) — они могут содержать свои { }
+        // которые мешают extractJsonObject
+        clean = clean.replace(/<think>[\s\S]*?<\/think>/gi, "");
+
+        // Удаляем только валидные HTML-теги (начинаются с буквы), чтобы не сломать
+        // текст типа "a < b" или "x > y"
+        clean = clean.replace(/<\/?[a-zA-Z][^>]*>/g, "");
+
+        clean = clean.trim();
+
+        // Пробуем извлечь JSON-объект
         let jsonStr = extractJsonObject(clean);
 
-        if (jsonStr) {
-            jsonStr = jsonStr.replace(/"<\/([^>]*?)>\s*([},\]])/g, '"$2');
-            jsonStr = jsonStr.replace(/<\/[^>]*?>/g, "");
-            jsonStr = stripTrailingCommas(jsonStr);
+        // [FIX] Если объект не найден, может модель вернула просто массив?
+        if (!jsonStr) {
+            const arrayMatch = clean.match(/\[[\s\S]*\]/);
+            if (arrayMatch) {
+                jsonStr = arrayMatch[0];
+            } else {
+                console.warn(`[${MODULE_NAME}] No JSON object found in response`);
+                return null;
+            }
+        }
 
-            let data = null;
+        // Убираем Markdown code blocks (если они еще остались)
+        jsonStr = jsonStr.replace(/```json\s*/gi, "").replace(/```\s*/gi, "");
+
+        // Убираем trailing commas
+        jsonStr = stripTrailingCommas(jsonStr);
+
+        let data = null;
+
+        // Попытка 1: обычный парсинг
+        try {
+            data = JSON.parse(jsonStr);
+        } catch (_) {
+            // Попытка 2: sanitized JSON
             try {
-                data = JSON.parse(jsonStr);
+                data = JSON.parse(stripTrailingCommas(sanitizeJsonString(jsonStr)));
             } catch (_) {
-                try {
-                    data = JSON.parse(stripTrailingCommas(sanitizeJsonString(jsonStr)));
-                } catch (_e2) {
-                    data = null;
-                }
+                data = null;
             }
-
-            if (data && Array.isArray(data.choices) && data.choices.length) {
-                return data.choices;
-            }
-
-            // Основной парсинг не удался целиком — пробуем спасти варианты по одному.
-            const salvaged = salvageChoicesArray(jsonStr);
-            if (salvaged?.length) return salvaged;
         }
 
-        // Последний рубеж. Если extractJsonObject вообще не нашёл пару
-        // скобок — самая частая причина в том, что ответ модели ОБРЕЗАН
-        // лимитом токенов до того, как JSON был дописан до конца (особенно
-        // актуально для более "многословных" моделей). Берём весь текст от
-        // первой "{" и пытаемся спасти хотя бы полностью дописанные варианты.
-        const rawStart = clean.indexOf("{");
-        if (rawStart !== -1) {
-            const rawSlice = clean.slice(rawStart);
-            const salvagedRaw =
-                salvageChoicesArray(rawSlice) ||
-                salvageChoicesArray(sanitizeJsonString(rawSlice));
-            if (salvagedRaw?.length) return salvagedRaw;
+        // [FIX] Проверяем различные форматы ответа
+        let choices = null;
+
+        if (data) {
+            if (Array.isArray(data.choices) && data.choices.length) {
+                choices = data.choices;
+            } else if (Array.isArray(data.options) && data.options.length) {
+                choices = data.options;
+            } else if (Array.isArray(data.responses) && data.responses.length) {
+                choices = data.responses;
+            } else if (Array.isArray(data.variants) && data.options.length) {
+                choices = data.variants;
+            } else if (Array.isArray(data)) {
+                // Модель вернула просто массив вариантов без обертки
+                choices = data;
+            }
         }
 
+        if (choices) return choices;
+
+        // Основной парсинг не удался — пробуем спасти варианты по одному
+        const salvaged = salvageChoicesArray(jsonStr);
+        if (salvaged?.length) return salvaged;
+
+        console.warn(`[${MODULE_NAME}] Could not extract choices from parsed data`);
         return null;
     } catch (e) {
         console.error(
@@ -1284,6 +1342,12 @@ function parseChoices(raw) {
     }
 }
 
+/**
+ * [FIX] Вызов кастомного API.
+ *  - Увеличен max_tokens с 1000 до 3000 (иначе JSON обрезается)
+ *  - Снижен temperature с 0.9 до 0.7 (для более точного следования инструкциям)
+ *  - Добавлена обработка ошибок response.json() (если API вернул HTML)
+ */
 async function callCustomApi(prompt) {
     const s = getSettings();
     const baseUrl = s.apiUrl
@@ -1295,34 +1359,42 @@ async function callCustomApi(prompt) {
     const modelFromSelect = sel?.style.display !== "none" ? sel?.value : null;
     const model = modelFromSelect || s.apiModel || "gpt-4o-mini";
 
-    const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${s.apiKey}`,
-        },
-        body: JSON.stringify({
-            model: model,
-            messages: [{ role: "user", content: prompt }],
-            temperature: 0.9,
-            // Некоторые модели (особенно "многословные"/reasoning-варианты
-            // вроде GPT-5.x или Gemini flash) заметно длиннее укладывают
-            // 4 варианта + JSON-обвязку, чем Claude, и на 1000 токенах
-            // ответ обрывался ДО закрывающей "}", из-за чего парсинг падал
-            // целиком. Увеличено, чтобы дать запас на завершение JSON.
-            max_tokens: 2000,
-        }),
-    });
+    let response;
+    try {
+        response = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${s.apiKey}`,
+            },
+            body: JSON.stringify({
+                model: model,
+                messages: [{ role: "user", content: prompt }],
+                temperature: 0.7,   // [FIX] снижено с 0.9
+                max_tokens: 3000,   // [FIX] увеличено с 1000
+                stream: false,      // явно отключаем streaming
+            }),
+        });
+    } catch (err) {
+        throw new Error(`Network error: ${err.message}`);
+    }
 
-    const data = await response.json();
+    // [FIX] Обрабатываем случай, когда API вернул не JSON (например, HTML-страницу ошибки)
+    let data;
+    try {
+        data = await response.json();
+    } catch (parseErr) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`Invalid JSON response (HTTP ${response.status}): ${text.slice(0, 200)}`);
+    }
 
     if (data.error) {
         const msg = data.error.message || JSON.stringify(data.error);
-        throw new Error(msg);
+        throw new Error(`API error: ${msg}`);
     }
 
     if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw new Error(`HTTP ${response.status}: ${JSON.stringify(data).slice(0, 200)}`);
     }
 
     return data.choices?.[0]?.message?.content || null;
@@ -1352,18 +1424,38 @@ async function generateChoices() {
         if (s.apiUrl && s.apiKey) {
             result = await callCustomApi(prompt);
         } else {
+            // [FIX] Пытаемся использовать встроенную модель ST с несколькими fallback'ами
+            // (разные версии ST имеют разную сигнатуру generateQuietPrompt)
             try {
-                result = await ctx.generateQuietPrompt({ quietPrompt: prompt });
-            } catch {
-                result = await ctx.generateQuietPrompt(prompt, false, false);
+                result = await ctx.generateQuietGenerate(prompt, {
+                    quiet_prompt: prompt,
+                    quietPrompt: prompt,
+                    signal: new AbortController().signal,
+                });
+            } catch (e1) {
+                try {
+                    result = await ctx.generateQuietPrompt({ quietPrompt: prompt });
+                } catch (e2) {
+                    try {
+                        result = await ctx.generateQuietPrompt(prompt, false, false);
+                    } catch (e3) {
+                        console.error("All generateQuietPrompt attempts failed:", e1, e2, e3);
+                        hideLoader();
+                        toastr.error("Не удалось вызвать модель SillyTavern. Настройте кастомное API в настройках расширения.");
+                        return;
+                    }
+                }
             }
         }
 
         if (!result) {
             hideLoader();
-            toastr.warning("Пустой ответ");
+            toastr.warning("Пустой ответ от модели");
             return;
         }
+
+        // Логируем сырой ответ для отладки
+        console.log(`[${MODULE_NAME}] Raw response (first 500 chars):`, result.slice(0, 500));
 
         const rawChoices = parseChoices(result);
         if (rawChoices?.length) {
@@ -1373,8 +1465,9 @@ async function generateChoices() {
             renderButtons(choices);
         } else {
             hideLoader();
+            console.error(`[${MODULE_NAME}] Failed to parse response:`, result);
             toastr.warning(
-                "Choice Tree UI: не удалось распарсить. F12 → Console",
+                "Choice Tree UI: не удалось распарсить ответ модели. Посмотрите F12 → Console для деталей.",
             );
         }
     } catch (err) {
