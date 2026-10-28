@@ -166,6 +166,23 @@ function injectSettingsPanel() {
                                    value="💾 Сохранить как пресет" />
                         </div>
 
+                        <div style="display:flex;gap:6px;margin-top:5px;flex-wrap:wrap;">
+                            <input type="button" id="ctu-preset-export"
+                                   class="menu_button" style="flex:1;"
+                                   value="⬇ Экспорт выбранного"
+                                   title="Скачать выбранный пресет в JSON" />
+                            <input type="button" id="ctu-preset-export-all"
+                                   class="menu_button" style="flex:1;"
+                                   value="⬇ Экспорт всех"
+                                   title="Скачать все пресеты в один JSON" />
+                            <input type="button" id="ctu-preset-import"
+                                   class="menu_button" style="flex:1;"
+                                   value="⬆ Импорт"
+                                   title="Загрузить пресет(ы) из JSON-файла" />
+                            <input type="file" id="ctu-preset-import-file"
+                                   accept=".json,application/json" style="display:none;" />
+                        </div>
+
                         <details id="ctu-archetype-details" style="margin-top:7px;">
                             <summary style="cursor:pointer;font-size:11px;opacity:0.6;padding:3px 0;user-select:none;">
                                 🎭 Названия/иконки вариантов для этого пресета
@@ -466,6 +483,135 @@ function deletePreset(name) {
     toastr.info(`Пресет "${name}" удалён`);
 }
 
+const PRESET_EXPORT_TYPE = "choice-tree-ui-presets";
+
+function downloadJson(filename, data) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function safeFileName(name) {
+    return String(name || "preset").replace(/[\/:*?"<>|]+/g, "_").trim() || "preset";
+}
+
+function exportPresets(names) {
+    const s = getSettings();
+    const list = s.promptPresets
+        .filter((p) => names.includes(p.name))
+        .map((p) => ({
+            name: p.name,
+            text: p.text,
+            archetypes: (p.archetypes || []).map((a) => ({
+                icon: a?.icon || "",
+                label: a?.label || "",
+            })),
+        }));
+
+    if (!list.length) {
+        toastr.info("Нет пресетов для экспорта");
+        return;
+    }
+
+    const filename = list.length === 1
+        ? `ctu-preset-${safeFileName(list[0].name)}.json`
+        : "ctu-presets-all.json";
+
+    downloadJson(filename, { type: PRESET_EXPORT_TYPE, version: 1, presets: list });
+    toastr.success(
+        list.length === 1
+            ? `Пресет "${list[0].name}" экспортирован`
+            : `Экспортировано пресетов: ${list.length}`,
+    );
+}
+
+function sanitizeImportedPreset(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const name = typeof raw.name === "string" ? raw.name.trim() : "";
+    const text = typeof raw.text === "string" ? raw.text : "";
+    if (!name || !text.trim()) return null;
+
+    const archetypes = Array.isArray(raw.archetypes)
+        ? raw.archetypes.slice(0, 4).map((a) => ({
+              icon: typeof a?.icon === "string" ? a.icon.trim() : "",
+              label: typeof a?.label === "string" ? a.label.trim() : "",
+          }))
+        : [];
+
+    return { name, text, archetypes };
+}
+
+function uniquePresetName(name) {
+    if (!findPreset(name)) return name;
+    let i = 2;
+    let candidate = `${name} (${i})`;
+    while (findPreset(candidate)) {
+        i++;
+        candidate = `${name} (${i})`;
+    }
+    return candidate;
+}
+
+function importPresetsFromData(data) {
+    const { saveSettingsDebounced } = SillyTavern.getContext();
+    const s = getSettings();
+
+    let rawList;
+    if (Array.isArray(data)) rawList = data;
+    else if (Array.isArray(data?.presets)) rawList = data.presets;
+    else if (data && typeof data === "object" && data.name && data.text) rawList = [data];
+    else rawList = [];
+
+    const imported = [];
+    let skipped = 0;
+    let renamed = 0;
+    for (const raw of rawList) {
+        const preset = sanitizeImportedPreset(raw);
+        if (!preset) {
+            skipped++;
+            continue;
+        }
+        const uniqueName = uniquePresetName(preset.name);
+        if (uniqueName !== preset.name) renamed++;
+        preset.name = uniqueName;
+        s.promptPresets.push(preset);
+        imported.push(preset);
+    }
+
+    if (!imported.length) {
+        toastr.error("В файле не найдено подходящих пресетов");
+        return;
+    }
+
+    saveSettingsDebounced();
+    populatePresetSelect();
+
+    let msg = `Импортировано пресетов: ${imported.length}`;
+    if (renamed) msg += ` (переименовано из-за совпадения имён: ${renamed})`;
+    if (skipped) msg += `, пропущено некорректных: ${skipped}`;
+    toastr.success(msg);
+}
+
+function importPresetsFromFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+        try {
+            importPresetsFromData(JSON.parse(String(reader.result)));
+        } catch (err) {
+            toastr.error("Не удалось прочитать файл: это не корректный JSON");
+        }
+    };
+    reader.onerror = () => toastr.error("Не удалось прочитать файл");
+    reader.readAsText(file);
+}
+
 function updateApiStatusBadge() {
     const s = getSettings();
     const badge = document.getElementById("ctu-api-status-badge");
@@ -747,6 +893,25 @@ function bindSettingsEvents() {
         const name = $("ctu-preset-select")?.value || "";
         deletePreset(name);
         if ($("ctu-preset-name")) $("ctu-preset-name").value = "";
+    });
+
+    $("ctu-preset-export")?.addEventListener("click", () => {
+        const name = $("ctu-preset-select")?.value || "";
+        if (!name) {
+            toastr.info("Сначала выберите пресет из списка");
+            return;
+        }
+        exportPresets([name]);
+    });
+    $("ctu-preset-export-all")?.addEventListener("click", () => {
+        exportPresets(s.promptPresets.map((p) => p.name));
+    });
+    $("ctu-preset-import")?.addEventListener("click", () => {
+        $("ctu-preset-import-file")?.click();
+    });
+    $("ctu-preset-import-file")?.addEventListener("change", (e) => {
+        importPresetsFromFile(e.target.files?.[0]);
+        e.target.value = "";
     });
 
     $("ctu-generate-now")?.addEventListener("click", generateChoices);
