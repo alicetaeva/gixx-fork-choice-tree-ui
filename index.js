@@ -1,5 +1,9 @@
 const MODULE_NAME = "choice-tree-ui";
 
+// Отладочные тосты на экране (полезно в Termux, где нет консоли).
+// Когда всё заработает — поставь false.
+const CTU_DEBUG = false;
+
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     autoGenerate: true,
@@ -28,11 +32,23 @@ const BUILTIN_ARCHETYPES = [
 const GENERIC_ICONS = ["●", "◆", "▲", "★"];
 const BAD_LABELS = new Set(["", "unidentified", "unknown", "n/a", "null", "undefined"]);
 
+function ctuDebug(msg) {
+    console.log(`[${MODULE_NAME}]`, msg);
+    if (!CTU_DEBUG) return;
+    try {
+        toastr.info(String(msg).slice(0, 300), "CTU debug", { timeOut: 15000 });
+    } catch (_) {}
+}
+
 /**
  * Приводит "сырой" вариант ответа от модели к безопасному виду.
+ * [PATCH] Принимает и строки, и объекты с альтернативными ключами текста.
  */
 function normalizeChoice(raw, index, archetypes) {
-    const c = raw || {};
+    const c = (typeof raw === "string") ? { text: raw } : { ...(raw || {}) };
+    if (!c.text) {
+        c.text = c.response ?? c.option ?? c.content ?? c.message ?? c.reply ?? "";
+    }
 
     let styleTone = String(c.tone || "").toLowerCase().trim();
     if (!TONE_META[styleTone]) {
@@ -989,13 +1005,6 @@ function bindSettingsEvents() {
     });
 }
 
-/**
- * Переписанный промпт:
- *  - Исправлена грамматика ("Answer on last message" → "Responding to the last message")
- *  - Показан полный валидный JSON-пример с 4 вариантами (модель лучше понимает формат)
- *  - Усилены инструкции о валидности JSON
- *  - Добавлено поле "label" с примерами
- */
 const DEFAULT_PROMPT_TEMPLATE = `You are a roleplay assistant. Your task is to suggest {{count}} possible responses to continue the conversation.
 
 <conversation>
@@ -1046,27 +1055,46 @@ function buildDefaultPrompt(ctx, count) {
     const historyText = chat
         .slice(-8)
         .map((m) => {
-            // FIX: m.name может быть undefined для системных сообщений
             const name = m.name || (m.is_user ? userName : charName);
             return `${name}: ${m.mes}`;
         })
         .join("\n\n");
 
     return DEFAULT_PROMPT_TEMPLATE
-        .replace(/\{\{count\}\}/g, count)
-        .replace(/\{\{history\}\}/g, historyText)
-        .replace(/\{\{user\}\}/g, userName)
-        .replace(/\{\{char\}\}/g, charName);
+        .replace(/\{\{count\}\}/g, () => String(count))
+        .replace(/\{\{user\}\}/g, () => userName)
+        .replace(/\{\{char\}\}/g, () => charName)
+        .replace(/\{\{history\}\}/g, () => historyText);
 }
 
+/**
+ * [PATCH] Строит JSON-шаблон для подстановки вместо {{json_template}}.
+ * Иконки берутся из архетипов активного пресета.
+ */
+function buildJsonTemplate(count, archetypes) {
+    const fb = (archetypes && archetypes.length) ? archetypes : BUILTIN_ARCHETYPES;
+    return Array.from({ length: count }, (_, i) => {
+        const a = fb[i] || {};
+        const tone = TONE_ORDER[i % TONE_ORDER.length];
+        const icon = a.icon || GENERIC_ICONS[i % GENERIC_ICONS.length];
+        return `{"id": ${i + 1}, "tone": "${tone}", "icon": "${icon}", "label": "<2-4 word name>", "text": "<the option itself>"}`;
+    }).join(",\n    ");
+}
+
+/**
+ * [PATCH] Теперь подставляет {{json_template}}. Стрелочные функции в replace
+ * защищают от спецпаттернов ($&, $1) в тексте истории. history — последней.
+ */
 function buildPrompt() {
     const s = getSettings();
     const ctx = SillyTavern.getContext();
 
-    if (s.customPrompt && s.customPrompt.trim().length > 10 && s.customPrompt.trim() !== DEFAULT_PROMPT_TEMPLATE.trim()) {
+    const custom = (s.customPrompt || "").trim();
+    if (custom.length > 10 && custom !== DEFAULT_PROMPT_TEMPLATE.trim()) {
         const chat = ctx.chat || [];
         const userName = ctx.name1 || "User";
         const charName = ctx.name2 || "Character";
+        const count = s.maxChoices;
 
         const historyText = chat
             .slice(-8)
@@ -1077,14 +1105,15 @@ function buildPrompt() {
             .join("\n\n");
 
         const lastMsg = [...chat].reverse().find((m) => !m.is_user)?.mes || "";
-        const count = s.maxChoices;
+        const jsonTemplate = buildJsonTemplate(count, getActivePresetObj()?.archetypes);
 
         return s.customPrompt
-            .replace(/\{\{history\}\}/g, historyText)
-            .replace(/\{\{user\}\}/g, userName)
-            .replace(/\{\{char\}\}/g, charName)
-            .replace(/\{\{lastMessage\}\}/g, lastMsg.slice(0, 300))
-            .replace(/\{\{count\}\}/g, count);
+            .replace(/\{\{json_template\}\}/g, () => jsonTemplate)
+            .replace(/\{\{user\}\}/g, () => userName)
+            .replace(/\{\{char\}\}/g, () => charName)
+            .replace(/\{\{count\}\}/g, () => String(count))
+            .replace(/\{\{lastMessage\}\}/g, () => lastMsg.slice(0, 300))
+            .replace(/\{\{history\}\}/g, () => historyText);
     }
 
     return buildDefaultPrompt(ctx, s.maxChoices);
@@ -1131,13 +1160,10 @@ function findMatchingBracket(text, startIdx, openCh, closeCh) {
 }
 
 /**
- * [FIX] Ищет объект с полем "choices" (или "options"/"responses"/"variants").
- * Старая версия брала ПЕРВЫЙ "{", что ломалось, если модель писала префикс
- * типа "Here is the JSON: {...}" или рассуждения "<think>{reasoning}</think>".
- * Теперь ищем объект, содержащий нужное поле. Если не нашли — fallback на первый.
+ * Ищет объект с полем "choices" (или "options"/"responses"/"variants").
+ * Если не нашли — fallback на первый валидный объект.
  */
 function extractJsonObject(text) {
-    // Проверяем различные названия поля с вариантами
     const fieldPatterns = [
         /"choices"\s*:/,
         /"options"\s*:/,
@@ -1152,7 +1178,6 @@ function extractJsonObject(text) {
     for (const pattern of fieldPatterns) {
         const match = text.match(pattern);
         if (match) {
-            // Ищем { перед этим полем
             const fieldIdx = match.index;
             let start = -1;
             let depth = 0;
@@ -1198,7 +1223,6 @@ function extractJsonObject(text) {
         }
     }
 
-    // Fallback: ищем первый { (для случаев, когда модель вернула что-то неожиданное)
     let start = text.indexOf("{");
     while (start !== -1) {
         const end = findMatchingBracket(text, start, "{", "}");
@@ -1213,8 +1237,7 @@ function extractJsonObject(text) {
 
 /**
  * Разбирает содержимое JSON-массива на отдельные объекты.
- * Незавершённый (обрезанный) последний объект естественным образом
- * не попадает в результат, т.к. depth никогда не возвращается к 0.
+ * Незавершённый (обрезанный) последний объект не попадает в результат.
  */
 function collectTopLevelObjects(text) {
     const objects = [];
@@ -1258,12 +1281,8 @@ function collectTopLevelObjects(text) {
 }
 
 /**
- * [FIX] Полностью переписана функция санитизации JSON.
- * Старая версия использовала флаг "expectingValue", который ломал обработку
- * неэкранированных кавычек внутри текста. Теперь логика простая:
- * - Если кавычка внутри строки, смотрим следующий значимый символ.
- * - Если это :, , } ] или конец текста — это конец JSON-строки.
- * - Иначе это неэкранированная кавычка внутри текста, экранируем её.
+ * Санитизация JSON: экранирует неэкранированные кавычки и переносы строк
+ * внутри строк, чинит невалидные escape-последовательности.
  */
 function sanitizeJsonString(jsonStr) {
     let result = "";
@@ -1282,18 +1301,15 @@ function sanitizeJsonString(jsonStr) {
             }
 
             if (ch === "\\") {
-                // Проверяем, валидный ли следующий символ для escape
                 if (nextCh && JSON_VALID_ESCAPES.has(nextCh)) {
                     result += ch;
                     escaped = true;
                 } else {
-                    // Невалидный escape (напр. "\U" в пути) — экранируем сам слеш
                     result += "\\\\";
                 }
                 continue;
             }
 
-            // Реальные переносы строк внутри строки → экранированные \n
             if (ch === "\n") {
                 result += "\\n";
                 continue;
@@ -1307,8 +1323,6 @@ function sanitizeJsonString(jsonStr) {
             }
 
             if (ch === '"') {
-                // Определяем, конец ли это JSON-строки или неэкранированная кавычка внутри текста.
-                // Пропускаем пробелы и смотрим следующий значимый символ.
                 let j = i + 1;
                 while (j < jsonStr.length && /\s/.test(jsonStr[j])) j++;
                 const nextSignificant = jsonStr[j];
@@ -1324,7 +1338,6 @@ function sanitizeJsonString(jsonStr) {
                     inString = false;
                     result += ch;
                 } else {
-                    // Это неэкранированная кавычка внутри текста модели
                     result += '\\"';
                 }
                 continue;
@@ -1334,7 +1347,6 @@ function sanitizeJsonString(jsonStr) {
             continue;
         }
 
-        // Вне строки
         if (ch === '"') {
             inString = true;
             result += ch;
@@ -1357,14 +1369,12 @@ function parseIndividualChoices(innerText) {
     const results = [];
 
     for (const objStr of objStrings) {
-        // Попытка 1: обычный парсинг
         const attempt1 = stripTrailingCommas(objStr);
         try {
             results.push(JSON.parse(attempt1));
             continue;
         } catch (_) {}
 
-        // Попытка 2: sanitized
         try {
             results.push(JSON.parse(stripTrailingCommas(sanitizeJsonString(objStr))));
         } catch (_) {
@@ -1376,17 +1386,10 @@ function parseIndividualChoices(innerText) {
 }
 
 /**
- * [FIX] Запасной путь: ищем массив вариантов по разным именам полей.
- *
- * ВАЖНО: если закрывающей "]" не нашлось (ответ модели был обрезан по
- * лимиту токенов — частая ситуация для "думающих" моделей вроде GPT-5.x
- * и Gemini flash-thinking, которые тратят часть бюджета токенов на
- * невидимые рассуждения), берём весь текст до конца строки.
- * collectTopLevelObjects() всё равно сам отбросит незавершённый последний
- * объект — так мы теряем максимум один вариант вместо всех.
+ * Запасной путь: ищем массив вариантов по разным именам полей.
+ * Если закрывающей "]" нет (ответ обрезан), берём весь хвост текста.
  */
 function salvageChoicesArray(jsonStr) {
-    // Ищем ключ "choices" (или options/responses/variants, с кавычками и без)
     const fieldPatterns = [
         /"choices"\s*:/,
         /"options"\s*:/,
@@ -1408,7 +1411,6 @@ function salvageChoicesArray(jsonStr) {
         }
     }
 
-    // Если не нашли поле, может модель вернула просто массив?
     if (bracketIdx === -1) {
         bracketIdx = jsonStr.indexOf("[");
     }
@@ -1417,8 +1419,6 @@ function salvageChoicesArray(jsonStr) {
 
     const endIdx = findMatchingBracket(jsonStr, bracketIdx, "[", "]");
 
-    // [FIX] Раньше при endIdx === -1 функция возвращала null. Теперь вместо
-    // этого просто берём хвост строки — это и есть починка обрезанного JSON.
     const inner =
         endIdx !== -1
             ? jsonStr.slice(bracketIdx + 1, endIdx)
@@ -1428,40 +1428,26 @@ function salvageChoicesArray(jsonStr) {
 }
 
 /**
- * Главный парсер ответов модели.
- * [FIX] Добавлена обработка:
- *  - Массива вместо объекта
- *  - Различных названий полей (options, responses, variants)
- *  - Моделей, возвращающих Markdown
- *  - Моделей, возвращающих рассуждения перед JSON
- *  - [НОВОЕ] Обрезанного (truncated) JSON — раньше в этом случае функция
- *    сразу возвращала null, даже не пытаясь спасти уже сгенерированные
- *    варианты. Это была главная причина ошибок на "думающих" моделях
- *    (GPT-5.x, Gemini flash-thinking), которые тратят часть max_tokens на
- *    скрытые рассуждения и обрезают видимый JSON-ответ на середине.
+ * Главный парсер ответов модели. Умеет: массив вместо объекта, разные имена
+ * полей, Markdown, рассуждения перед JSON, обрезанный (truncated) JSON.
  */
 function parseChoices(raw) {
     if (!raw?.trim()) return null;
     try {
-        // Нормализуем переносы строк
         let clean = raw
             .replace(/\r\n/g, "\n")
             .replace(/\r/g, "\n");
 
-        // Удаляем <think> блоки (reasoning модели) — они могут содержать свои { }
-        // которые мешают extractJsonObject
+        // Удаляем <think> блоки (reasoning модели)
         clean = clean.replace(/<think>[\s\S]*?<\/think>/gi, "");
 
-        // Удаляем только валидные HTML-теги (начинаются с буквы), чтобы не сломать
-        // текст типа "a < b" или "x > y"
+        // Удаляем валидные HTML-теги (начинаются с буквы)
         clean = clean.replace(/<\/?[a-zA-Z][^>]*>/g, "");
 
         clean = clean.trim();
 
-        // Пробуем извлечь JSON-объект
         let jsonStr = extractJsonObject(clean);
 
-        // Если объект не найден, может модель вернула просто массив?
         if (!jsonStr) {
             const arrayMatch = clean.match(/\[[\s\S]*\]/);
             if (arrayMatch) {
@@ -1469,14 +1455,6 @@ function parseChoices(raw) {
             }
         }
 
-        // [FIX] Раньше здесь был безусловный `return null`, если не нашли ни
-        // объект, ни массив с закрывающими скобками. Именно это ломало ответы
-        // от моделей, которые обрезают JSON на середине из-за лимита токенов:
-        // у обрезанного текста нет ни закрывающей "}", ни закрывающей "]",
-        // поэтому обе попытки выше проваливались, и функция сдавалась,
-        // хотя в тексте уже могли быть 2-3 полностью сформированных варианта.
-        // Теперь в этом случае пробуем спасти варианты прямо из "сырого"
-        // текста без требования валидной структуры целиком.
         if (!jsonStr) {
             const salvagedFromRaw = salvageChoicesArray(clean);
             if (salvagedFromRaw?.length) {
@@ -1489,19 +1467,14 @@ function parseChoices(raw) {
             return null;
         }
 
-        // Убираем Markdown code blocks (если они еще остались)
         jsonStr = jsonStr.replace(/```json\s*/gi, "").replace(/```\s*/gi, "");
-
-        // Убираем trailing commas
         jsonStr = stripTrailingCommas(jsonStr);
 
         let data = null;
 
-        // Попытка 1: обычный парсинг
         try {
             data = JSON.parse(jsonStr);
         } catch (_) {
-            // Попытка 2: sanitized JSON
             try {
                 data = JSON.parse(stripTrailingCommas(sanitizeJsonString(jsonStr)));
             } catch (_) {
@@ -1509,7 +1482,6 @@ function parseChoices(raw) {
             }
         }
 
-        // Проверяем различные форматы ответа
         let choices = null;
 
         if (data) {
@@ -1520,22 +1492,14 @@ function parseChoices(raw) {
             } else if (Array.isArray(data.responses) && data.responses.length) {
                 choices = data.responses;
             } else if (Array.isArray(data.variants) && data.variants.length) {
-                // [FIX] была опечатка: проверялось `data.options.length` вместо
-                // `data.variants.length`, что при отсутствии поля "options"
-                // кидало TypeError и обнуляло весь парсинг.
                 choices = data.variants;
             } else if (Array.isArray(data)) {
-                // Модель вернула просто массив вариантов без обертки
                 choices = data;
             }
         }
 
         if (choices) return choices;
 
-        // Основной парсинг не удался (например, JSON обрезан на середине) —
-        // пробуем спасти варианты по одному, даже без закрывающих скобок.
-        // Пробуем и на извлечённом фрагменте, и на полном "сыром" тексте —
-        // на случай если границы фрагмента были определены неточно.
         const salvaged = salvageChoicesArray(jsonStr) || salvageChoicesArray(clean);
         if (salvaged?.length) return salvaged;
 
@@ -1552,10 +1516,8 @@ function parseChoices(raw) {
 }
 
 /**
- * [FIX] Приводит поле content ответа API к строке.
- * Некоторые OpenAI-совместимые прокси (в т.ч. для Gemini) возвращают
- * content не строкой, а массивом частей вида [{type:"text", text:"..."}],
- * из-за чего raw?.trim() в parseChoices падал с TypeError.
+ * Приводит поле content ответа API к строке (некоторые прокси возвращают
+ * массив частей [{type:"text", text:"..."}]).
  */
 function extractContentText(content) {
     if (typeof content === "string") return content;
@@ -1568,18 +1530,9 @@ function extractContentText(content) {
 }
 
 /**
- * [FIX] Вызов кастомного API.
- *  - Увеличен max_tokens с 1000 до 4096 (для "думающих" моделей типа
- *    GPT-5.x / Gemini flash-thinking, которые тратят часть токенов на
- *    скрытые рассуждения, 1000-3000 токенов часто не хватает даже на
- *    рассуждения, не говоря уже о самом JSON-ответе)
- *  - Снижен temperature с 0.9 до 0.7 (для более точного следования инструкциям)
- *  - Добавлена обработка ошибок response.json() (если API вернул HTML)
- *  - [НОВОЕ] Автоматический повтор запроса с max_completion_tokens вместо
- *    max_tokens, если провайдер (напр. официальный OpenAI для моделей
- *    o-серии/gpt-5) вернул ошибку о неподдерживаемом параметре
- *  - [НОВОЕ] Приведение content к строке, если провайдер вернул массив частей
- *  - [НОВОЕ] Предупреждение в консоль, если ответ обрезан по finish_reason
+ * Вызов кастомного API.
+ * [PATCH] MAX_TOKENS = 8192; безопасное чтение тела ответа (text → JSON.parse);
+ * отладочный тост с finish_reason и usage.
  */
 async function callCustomApi(prompt) {
     const s = getSettings();
@@ -1592,7 +1545,7 @@ async function callCustomApi(prompt) {
     const modelFromSelect = sel?.style.display !== "none" ? sel?.value : null;
     const model = modelFromSelect || s.apiModel || "gpt-4o-mini";
 
-    const MAX_TOKENS = 4096; // [FIX] было 1000, потом 3000 — всё ещё мало для reasoning-моделей
+    const MAX_TOKENS = 8192;
 
     async function doFetch(body) {
         let resp;
@@ -1609,11 +1562,11 @@ async function callCustomApi(prompt) {
             throw new Error(`Network error: ${err.message}`);
         }
 
+        const text = await resp.text().catch(() => "");
         let json;
         try {
-            json = await resp.json();
+            json = JSON.parse(text);
         } catch (parseErr) {
-            const text = await resp.text().catch(() => "");
             throw new Error(
                 `Invalid JSON response (HTTP ${resp.status}): ${text.slice(0, 200)}`,
             );
@@ -1633,9 +1586,7 @@ async function callCustomApi(prompt) {
         max_tokens: MAX_TOKENS,
     });
 
-    // [FIX] Некоторые провайдеры (в т.ч. официальный OpenAI для новых
-    // reasoning-моделей) требуют "max_completion_tokens" вместо "max_tokens"
-    // и отвечают ошибкой 400. Автоматически повторяем запрос правильным полем.
+    // Некоторые провайдеры требуют "max_completion_tokens" вместо "max_tokens"
     const errMsg = data?.error?.message || "";
     if (data?.error && /max_tokens/i.test(errMsg) && /max_completion_tokens/i.test(errMsg)) {
         ({ resp: response, json: data } = await doFetch({
@@ -1655,15 +1606,61 @@ async function callCustomApi(prompt) {
 
     const choice = data.choices?.[0];
 
+    ctuDebug(
+        `API: finish=${choice?.finish_reason} usage=${JSON.stringify(data.usage || {})} ` +
+        `content=${choice?.message?.content ? "есть" : "ПУСТО"}`,
+    );
+
     if (choice?.finish_reason === "length") {
         console.warn(
             `[${MODULE_NAME}] Response was truncated by the token limit (finish_reason=length). ` +
-            `If choices keep getting cut off, this is likely a "thinking" model spending its ` +
-            `token budget on hidden reasoning — consider raising max_tokens further.`,
+            `Likely a "thinking" model spending its token budget on hidden reasoning.`,
         );
     }
 
     return extractContentText(choice?.message?.content) || null;
+}
+
+/**
+ * [PATCH] Вызов модели SillyTavern через generateRaw (шлёт только наш промпт,
+ * без карточки персонажа и истории чата). Сначала новая сигнатура (объект),
+ * потом старая (позиционные аргументы).
+ */
+async function callStModel(prompt) {
+    const ctx = SillyTavern.getContext();
+    let r = "";
+
+    if (typeof ctx.generateRaw === "function") {
+        try {
+            r = await ctx.generateRaw({ prompt, systemPrompt: "", responseLength: 2048 });
+        } catch (e) {
+            console.warn(`[${MODULE_NAME}] generateRaw(object) failed`, e);
+        }
+        if (!r || !String(r).trim()) {
+            try {
+                r = await ctx.generateRaw(prompt, null, false, false, "", 2048);
+            } catch (e) {
+                console.warn(`[${MODULE_NAME}] generateRaw(positional) failed`, e);
+            }
+        }
+    }
+
+    // Последний шанс: generateQuietPrompt (тянет контекст персонажа)
+    if (!r || !String(r).trim()) {
+        try {
+            r = await ctx.generateQuietPrompt({ quietPrompt: prompt });
+        } catch (e) {
+            console.warn(`[${MODULE_NAME}] generateQuietPrompt(object) failed`, e);
+            try {
+                r = await ctx.generateQuietPrompt(prompt, false, false);
+            } catch (e2) {
+                console.error(`[${MODULE_NAME}] all ST generation attempts failed`, e2);
+                throw new Error("Не удалось вызвать модель SillyTavern");
+            }
+        }
+    }
+
+    return r;
 }
 
 async function generateChoices() {
@@ -1682,7 +1679,6 @@ async function generateChoices() {
     showLoader();
 
     try {
-        const ctx = SillyTavern.getContext();
         const prompt = buildPrompt();
         const activePresetArchetypes = getActivePresetObj()?.archetypes || null;
 
@@ -1690,31 +1686,16 @@ async function generateChoices() {
         if (s.apiUrl && s.apiKey) {
             result = await callCustomApi(prompt);
         } else {
-            // [FIX] Пытаемся использовать встроенную модель ST с несколькими fallback'ами
-            // (разные версии ST имеют разную сигнатуру generateQuietPrompt)
-            try {
-                result = await ctx.generateQuietGenerate(prompt, {
-                    quiet_prompt: prompt,
-                    quietPrompt: prompt,
-                    signal: new AbortController().signal,
-                });
-            } catch (e1) {
-                try {
-                    result = await ctx.generateQuietPrompt({ quietPrompt: prompt });
-                } catch (e2) {
-                    try {
-                        result = await ctx.generateQuietPrompt(prompt, false, false);
-                    } catch (e3) {
-                        console.error("All generateQuietPrompt attempts failed:", e1, e2, e3);
-                        hideLoader();
-                        toastr.error("Не удалось вызвать модель SillyTavern. Настройте кастомное API в настройках расширения.");
-                        return;
-                    }
-                }
-            }
+            result = await callStModel(prompt);
         }
 
-        if (!result) {
+        result = typeof result === "string" ? result : extractContentText(result);
+
+        ctuDebug(
+            `ответ: ${result ? result.length + " симв." : "ПУСТО"} | "${(result || "").slice(0, 120)}"`,
+        );
+
+        if (!result || !result.trim()) {
             hideLoader();
             toastr.warning(
                 "Пустой ответ от модели. Если это \"думающая\" модель (GPT-5.x, Gemini flash-thinking) — " +
@@ -1724,14 +1705,11 @@ async function generateChoices() {
             return;
         }
 
-        // Логируем сырой ответ для отладки
         console.log(`[${MODULE_NAME}] Raw response (first 500 chars):`, result.slice(0, 500));
 
         const rawChoices = parseChoices(result);
         if (rawChoices?.length) {
             if (rawChoices.length < s.maxChoices) {
-                // [НОВОЕ] Явно сообщаем, если удалось спасти не все варианты —
-                // обычно это значит, что ответ модели был обрезан по лимиту токенов.
                 toastr.info(
                     `Получено ${rawChoices.length} из ${s.maxChoices} вариантов — похоже, ответ модели ` +
                     `был обрезан. Попробуйте увеличить лимит токенов в настройках API или уменьшить число вариантов.`,
@@ -1740,6 +1718,12 @@ async function generateChoices() {
             const choices = rawChoices.map((c, i) =>
                 normalizeChoice(c, i, activePresetArchetypes),
             );
+
+            const emptyCount = choices.filter((c) => !String(c.text || "").trim()).length;
+            if (emptyCount) {
+                ctuDebug(`Вариантов без текста: ${emptyCount} из ${choices.length}. Сырой ответ: ${result.slice(0, 200)}`);
+            }
+
             renderButtons(choices);
         } else {
             hideLoader();
