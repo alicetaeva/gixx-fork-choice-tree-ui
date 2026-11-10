@@ -755,6 +755,36 @@ function deleteApiProfile(name) {
     toastr.info(`Профиль "${name}" удалён`);
 }
 
+/**
+ * Базовый URL кастомного API без хвоста /chat/completions.
+ */
+function ctuBaseUrl(url) {
+    return String(url || "")
+        .trim()
+        .replace(/\/+$/, "")
+        .replace(/\/chat\/completions$/, "");
+}
+
+/**
+ * [FIX CORS] Запрос к кастомному API через сервер SillyTavern.
+ * Прямой fetch из браузера блокируется CORS у большинства провайдеров
+ * (ошибка "Failed to fetch"). Сервер ST CORS не проверяет, поэтому
+ * шлём запрос через встроенный бэкенд ST (источник "openai" +
+ * reverse_proxy + proxy_password = наши URL и ключ).
+ */
+async function ctuBackendFetch(path, payload) {
+    const ctx = SillyTavern.getContext();
+    const headers =
+        typeof ctx.getRequestHeaders === "function"
+            ? ctx.getRequestHeaders()
+            : { "Content-Type": "application/json" };
+    return fetch(path, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+    });
+}
+
 async function fetchAndShowModels() {
     const s = getSettings();
     if (!s.apiUrl || !s.apiKey) {
@@ -766,12 +796,21 @@ async function fetchAndShowModels() {
     if (fetchBtn) fetchBtn.value = "↻ Загружаю...";
 
     try {
-        const base = s.apiUrl
-            .replace(/\/$/, "")
-            .replace(/\/chat\/completions$/, "");
-        const resp = await fetch(`${base}/models`, {
-            headers: { Authorization: `Bearer ${s.apiKey}` },
-        });
+        const base = ctuBaseUrl(s.apiUrl);
+        let resp;
+        try {
+            resp = await fetch(`${base}/models`, {
+                headers: { Authorization: `Bearer ${s.apiKey}` },
+            });
+        } catch (netErr) {
+            // CORS / сеть: пробуем через сервер SillyTavern
+            ctuDebug(`models: прямой запрос не прошёл (${netErr.message}), иду через ST`);
+            resp = await ctuBackendFetch("/api/backends/chat-completions/status", {
+                chat_completion_source: "openai",
+                reverse_proxy: base,
+                proxy_password: s.apiKey,
+            });
+        }
 
         if (!resp.ok) throw new Error(`${resp.status}`);
         const data = await resp.json();
@@ -1536,9 +1575,7 @@ function extractContentText(content) {
  */
 async function callCustomApi(prompt) {
     const s = getSettings();
-    const baseUrl = s.apiUrl
-        .replace(/\/$/, "")
-        .replace(/\/chat\/completions$/, "");
+    const baseUrl = ctuBaseUrl(s.apiUrl);
     const endpoint = `${baseUrl}/chat/completions`;
 
     const sel = document.getElementById("ctu-api-model-select");
@@ -1559,7 +1596,22 @@ async function callCustomApi(prompt) {
                 body: JSON.stringify(body),
             });
         } catch (err) {
-            throw new Error(`Network error: ${err.message}`);
+            // [FIX CORS] Браузер заблокировал запрос (CORS) — повторяем
+            // через сервер SillyTavern, где CORS не действует.
+            ctuDebug(`прямой запрос не прошёл (${err.message}), иду через ST`);
+            try {
+                resp = await ctuBackendFetch("/api/backends/chat-completions/generate", {
+                    ...body,
+                    chat_completion_source: "openai",
+                    reverse_proxy: baseUrl,
+                    proxy_password: s.apiKey,
+                    stream: false,
+                });
+            } catch (err2) {
+                throw new Error(
+                    `Network error: ${err.message}; через сервер ST тоже не удалось: ${err2.message}`,
+                );
+            }
         }
 
         const text = await resp.text().catch(() => "");
