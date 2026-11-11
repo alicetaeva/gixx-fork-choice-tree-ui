@@ -5,6 +5,8 @@ const MODULE_NAME = "choice-tree-ui";
 const CTU_DEBUG = false;
 
 const DEFAULT_SETTINGS = Object.freeze({
+    theme: "rose-glass",
+    apiViaSt: false,
     enabled: true,
     autoGenerate: true,
     maxChoices: 4,
@@ -31,6 +33,608 @@ const BUILTIN_ARCHETYPES = [
 
 const GENERIC_ICONS = ["●", "◆", "▲", "★"];
 const BAD_LABELS = new Set(["", "unidentified", "unknown", "n/a", "null", "undefined"]);
+
+
+// ═════════════ Логи (для телефона, где нет консоли F12) ═════════════
+const CTU_VERSION = "3.1.0";
+const CTU_LOG_KEY = "ctu_log_v1";
+const CTU_LOG_MAX = 500;
+let ctuLogBuf = [];
+let ctuLogInternal = false;
+let ctuLogSaveTimer = null;
+let ctuLogViewTimer = null;
+
+try {
+    const saved = JSON.parse(localStorage.getItem(CTU_LOG_KEY) || "[]");
+    if (Array.isArray(saved)) ctuLogBuf = saved.slice(-CTU_LOG_MAX);
+} catch (_) {}
+
+const CTU_SECRET_RE = /^(api[_-]?key|authorization|proxy_password|password|secret)$/i;
+
+function ctuSafe(value, depth = 0) {
+    if (value === undefined) return undefined;
+    if (value instanceof Error) {
+        return {
+            name: value.name,
+            message: value.message,
+            stack: String(value.stack || "").split("\n").slice(0, 6).join("\n"),
+        };
+    }
+    if (typeof value === "string") {
+        return value.length > 1500 ? value.slice(0, 1500) + `…(+${value.length - 1500})` : value;
+    }
+    if (value === null || typeof value !== "object") return value;
+    if (depth > 3) return "[…]";
+    if (Array.isArray(value)) return value.slice(0, 30).map((v) => ctuSafe(v, depth + 1));
+    const out = {};
+    for (const [k, v] of Object.entries(value).slice(0, 40)) {
+        out[k] = CTU_SECRET_RE.test(k) ? "***" : ctuSafe(v, depth + 1);
+    }
+    return out;
+}
+
+function ctuLogPersist() {
+    try {
+        localStorage.setItem(CTU_LOG_KEY, JSON.stringify(ctuLogBuf));
+    } catch (_) {
+        try { localStorage.setItem(CTU_LOG_KEY, JSON.stringify(ctuLogBuf.slice(-100))); } catch (__) {}
+    }
+}
+
+function ctuPush(level, msg, data) {
+    const entry = { t: new Date().toISOString(), l: level, m: ctuSafe(String(msg)) };
+    const d = ctuSafe(data);
+    if (d !== undefined) entry.d = d;
+    ctuLogBuf.push(entry);
+    if (ctuLogBuf.length > CTU_LOG_MAX) ctuLogBuf.splice(0, ctuLogBuf.length - CTU_LOG_MAX);
+    clearTimeout(ctuLogSaveTimer);
+    ctuLogSaveTimer = setTimeout(ctuLogPersist, 400);
+    clearTimeout(ctuLogViewTimer);
+    ctuLogViewTimer = setTimeout(ctuRefreshLogView, 250);
+}
+
+function ctuLog(level, msg, data) {
+    ctuPush(level, msg, data);
+    ctuLogInternal = true;
+    try {
+        const fn = (level === "debug" ? console.log : console[level]) || console.log;
+        if (data === undefined) fn.call(console, `[${MODULE_NAME}]`, msg);
+        else fn.call(console, `[${MODULE_NAME}]`, msg, ctuSafe(data));
+    } finally {
+        ctuLogInternal = false;
+    }
+}
+
+// Все console.*("[choice-tree-ui] ...") тоже попадают в лог
+(function ctuHookConsole() {
+    for (const level of ["log", "info", "warn", "error"]) {
+        const orig = console[level];
+        if (typeof orig !== "function" || orig.__ctu) continue;
+        const wrapped = function (...args) {
+            try {
+                if (!ctuLogInternal && typeof args[0] === "string" && args[0].startsWith(`[${MODULE_NAME}]`)) {
+                    const first = args[0].slice(MODULE_NAME.length + 2).trim();
+                    const rest = args.slice(1).map((a) => ctuSafe(a));
+                    ctuPush(level === "log" ? "info" : level, first, rest.length ? rest : undefined);
+                }
+            } catch (_) {}
+            return orig.apply(this, args);
+        };
+        wrapped.__ctu = true;
+        console[level] = wrapped;
+    }
+})();
+
+window.addEventListener("error", (e) => {
+    const src = String(e.filename || "");
+    if (src.includes("choice-tree") || src.includes(MODULE_NAME)) {
+        ctuPush("error", "JS error", { message: e.message, file: src, line: e.lineno, col: e.colno });
+    }
+});
+window.addEventListener("unhandledrejection", (e) => {
+    const r = e.reason;
+    if (String(r?.stack || "").includes("choice-tree") || String(r?.message || "").includes(MODULE_NAME)) {
+        ctuPush("error", "Unhandled rejection", r);
+    }
+});
+
+function ctuEnvSnapshot() {
+    let s = {};
+    try { s = getSettings(); } catch (_) {}
+    let apiUrl;
+    try {
+        const u = new URL(s.apiUrl);
+        apiUrl = u.origin + u.pathname;
+    } catch (_) {
+        apiUrl = s.apiUrl ? "(невалидный URL) " + String(s.apiUrl).slice(0, 80) : "(пусто — используется ST)";
+    }
+    return {
+        build: CTU_VERSION,
+        time: new Date().toString(),
+        page: location.origin,
+        secureContext: window.isSecureContext,
+        online: navigator.onLine,
+        userAgent: navigator.userAgent,
+        language: navigator.language,
+        theme: s.theme,
+        api: {
+            url: apiUrl,
+            keySet: !!s.apiKey,
+            keyLength: s.apiKey ? s.apiKey.length : 0,
+            model: s.apiModel,
+            viaSt: !!s.apiViaSt,
+            profile: s.activeApiProfile,
+        },
+        maxChoices: s.maxChoices,
+        compactMode: s.compactMode,
+        preset: s.activePreset,
+    };
+}
+
+function ctuLogsAsText() {
+    const head = [
+        "=== Choice Tree UI — лог (время в UTC; ключи и текст чата не записываются) ===",
+        JSON.stringify(ctuEnvSnapshot(), null, 2),
+        "=== записи ===",
+    ];
+    const lines = ctuLogBuf.map((e) => {
+        const d = e.d !== undefined ? " " + (typeof e.d === "string" ? e.d : JSON.stringify(e.d)) : "";
+        return `[${e.t.slice(0, 10)} ${e.t.slice(11, 23)}] ${String(e.l).toUpperCase().padEnd(5)} ${e.m}${d}`;
+    });
+    return head.concat(lines).join("\n");
+}
+
+function ctuRefreshLogView() {
+    const cnt = document.getElementById("ctu-log-count");
+    if (cnt) cnt.textContent = `(${ctuLogBuf.length})`;
+    const ta = document.getElementById("ctu-log-view");
+    const det = document.getElementById("ctu-log-details");
+    if (!ta || !det?.open) return;
+    ta.value = ctuLogsAsText();
+    ta.scrollTop = ta.scrollHeight;
+}
+
+async function ctuCopyText(text) {
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch (_) {}
+    try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        const ok = document.execCommand("copy");
+        ta.remove();
+        return ok;
+    } catch (_) {
+        return false;
+    }
+}
+
+function ctuDownloadText(filename, text) {
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1500);
+}
+
+async function ctuFetchTimeout(url, opts = {}, ms = 20000) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    try {
+        return await fetch(url, { ...opts, signal: ctrl.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+// ═════════════ Темы оформления ═════════════
+const CTU_THEMES = [
+    {
+        "id": "rose-glass",
+        "name": "Розовое стекло",
+        "hint": "классика по умолчанию",
+        "bg": "#1a1420",
+        "accent": "#f9a8c9",
+        "alt": "#a7d2ff",
+        "tones": [
+            "#a7d2ff",
+            "#c8dcff",
+            "#ffb496",
+            "#dcaaff"
+        ]
+    },
+    {
+        "id": "lacquer",
+        "name": "Лаковая шкатулка",
+        "hint": "чёрный лак, киноварь, золотая нить",
+        "bg": "#120b0b",
+        "accent": "#e2502f",
+        "alt": "#d4a85c",
+        "tones": [
+            "#e8a0a0",
+            "#9fb4c7",
+            "#e2502f",
+            "#d4a85c"
+        ]
+    },
+    {
+        "id": "verdigris",
+        "name": "Патина",
+        "hint": "окисленная медь и бронза",
+        "bg": "#0e1818",
+        "accent": "#5fbfa8",
+        "alt": "#c28a5a",
+        "tones": [
+            "#7fd0bd",
+            "#8fb2c4",
+            "#d08a5c",
+            "#b5a3d6"
+        ]
+    },
+    {
+        "id": "moth",
+        "name": "Мотылёк",
+        "hint": "тёплая тьма и лунный свет лампы",
+        "bg": "#1a1410",
+        "accent": "#f2e3a1",
+        "alt": "#d9b779",
+        "tones": [
+            "#f0d9a0",
+            "#b9c4b0",
+            "#e0a070",
+            "#cdb4d8"
+        ]
+    },
+    {
+        "id": "cyanotype",
+        "name": "Цианотипия",
+        "hint": "синька, чертёжная сетка",
+        "bg": "#0a2454",
+        "accent": "#cfe3ff",
+        "alt": "#7fb0ff",
+        "tones": [
+            "#aee0ff",
+            "#ffffff",
+            "#ffd27a",
+            "#ff9ec1"
+        ]
+    },
+    {
+        "id": "oxblood",
+        "name": "Бордо и сливки",
+        "hint": "кремовая бумага, цвет бычьей крови",
+        "bg": "#faf3e6",
+        "accent": "#7d1f2c",
+        "alt": "#b08a4a",
+        "tones": [
+            "#b5546a",
+            "#4f6b7a",
+            "#b0452a",
+            "#6b4a8c"
+        ]
+    },
+    {
+        "id": "amber",
+        "name": "Дымчатый янтарь",
+        "hint": "густой мёд за тёмным стеклом",
+        "bg": "#1c1208",
+        "accent": "#f0a830",
+        "alt": "#ffd27a",
+        "tones": [
+            "#ffcf8a",
+            "#c9b99a",
+            "#ff8a4c",
+            "#c7a2e8"
+        ]
+    },
+    {
+        "id": "opal",
+        "name": "Опал",
+        "hint": "перламутровые переливы",
+        "bg": "#fafafd",
+        "accent": "#7a6ff0",
+        "alt": "#3fc2b5",
+        "tones": [
+            "#e0629a",
+            "#4a7fd0",
+            "#e08a3a",
+            "#8a5fe0"
+        ]
+    },
+    {
+        "id": "mercury",
+        "name": "Ртуть",
+        "hint": "холодный хром, жидкий металл",
+        "bg": "#14161a",
+        "accent": "#d7dde6",
+        "alt": "#8fa3b8",
+        "tones": [
+            "#b8d4e8",
+            "#e2e6ec",
+            "#c9a9a0",
+            "#a9b4d8"
+        ]
+    },
+    {
+        "id": "ember",
+        "name": "Зола и угли",
+        "hint": "пепел, под которым тлеет жар",
+        "bg": "#181616",
+        "accent": "#ff6a2b",
+        "alt": "#ffb347",
+        "tones": [
+            "#ffb38a",
+            "#9aa7b0",
+            "#ff6a2b",
+            "#e85d9a"
+        ]
+    },
+    {
+        "id": "indigo",
+        "name": "Индиго и шафран",
+        "hint": "крашеная ткань, золотая нить",
+        "bg": "#13183a",
+        "accent": "#f4b942",
+        "alt": "#9fb0ff",
+        "tones": [
+            "#a9b8ff",
+            "#d8d4c4",
+            "#f4b942",
+            "#f08ab4"
+        ]
+    },
+    {
+        "id": "lichen",
+        "name": "Лишайник",
+        "hint": "матовый камень, мох и тишина",
+        "bg": "#222622",
+        "accent": "#a9c48a",
+        "alt": "#d6c58a",
+        "tones": [
+            "#b9d4a0",
+            "#9db5b8",
+            "#d9a066",
+            "#bba0c8"
+        ]
+    },
+    {
+        "id": "lantern",
+        "name": "Бумажный фонарь",
+        "hint": "рисовая бумага и тёплое свечение",
+        "bg": "#fff8ea",
+        "accent": "#e0702a",
+        "alt": "#d9a441",
+        "tones": [
+            "#d9798a",
+            "#5f7f8a",
+            "#d6521f",
+            "#8a5fa8"
+        ]
+    },
+    {
+        "id": "absinthe",
+        "name": "Абсент",
+        "hint": "зелёная фея в тёмном бокале",
+        "bg": "#0e1810",
+        "accent": "#c4e86b",
+        "alt": "#7fd1a0",
+        "tones": [
+            "#a6e3b8",
+            "#9fc0d0",
+            "#e6d86b",
+            "#c8a6e6"
+        ]
+    },
+    {
+        "id": "tidepool",
+        "name": "Заводь",
+        "hint": "глубокая бирюза и коралл",
+        "bg": "#082028",
+        "accent": "#ff8a7a",
+        "alt": "#4fd1c5",
+        "tones": [
+            "#7fe0d4",
+            "#8fb8d8",
+            "#ff8a7a",
+            "#f0a6d8"
+        ]
+    }
+];
+
+function applyTheme() {
+    let id = "rose-glass";
+    try { id = getSettings().theme || "rose-glass"; } catch (_) {}
+    if (!CTU_THEMES.some((x) => x.id === id)) id = "rose-glass";
+    document.documentElement.setAttribute("data-ctu-theme", id);
+}
+
+function renderThemePicker() {
+    const grid = document.getElementById("ctu-theme-grid");
+    if (!grid) return;
+    const cur = getSettings().theme || "rose-glass";
+    grid.innerHTML = "";
+    for (const th of CTU_THEMES) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "ctu-theme-tile" + (th.id === cur ? " active" : "");
+        b.dataset.theme = th.id;
+        b.innerHTML = `
+            <div class="ctu-theme-swatch" style="background:linear-gradient(135deg, ${th.bg} 40%, ${th.accent} 150%);">
+                ${th.tones.map((c) => `<i style="background:${c}"></i>`).join("")}
+            </div>
+            <div class="ctu-theme-name">${escapeHtml(th.name)}</div>
+            <div class="ctu-theme-hint">${escapeHtml(th.hint)}</div>`;
+        grid.appendChild(b);
+    }
+    const nameEl = document.getElementById("ctu-theme-current");
+    if (nameEl) nameEl.textContent = CTU_THEMES.find((x) => x.id === cur)?.name || "";
+}
+
+// ═════════════ Связь с API: напрямую или через сервер ST ═════════════
+function ctuBaseUrl(url) {
+    return String(url || "").trim().replace(/\/+$/, "").replace(/\/chat\/completions$/, "");
+}
+
+async function ctuBackendFetch(path, payload) {
+    const ctx = SillyTavern.getContext();
+    const headers =
+        typeof ctx.getRequestHeaders === "function"
+            ? ctx.getRequestHeaders()
+            : { "Content-Type": "application/json" };
+    return ctuFetchTimeout(path, { method: "POST", headers, body: JSON.stringify(payload) }, 120000);
+}
+
+async function ctuRunDiagnostics() {
+    const s = getSettings();
+    const base = ctuBaseUrl(s.apiUrl);
+    ctuLog("info", "━━━ ДИАГНОСТИКА НАЧАТА ━━━", ctuEnvSnapshot());
+    if (!base || !s.apiKey) {
+        ctuLog("warn", "Свой API не задан (URL/ключ пусты) — расширение использует модель SillyTavern. Проверять нечего.");
+        return "Свой API не задан";
+    }
+    if (location.protocol === "https:" && base.startsWith("http:")) {
+        ctuLog("warn", "Смешанный контент: страница на https, API на http — браузер заблокирует прямой запрос", { page: location.origin, api: base });
+    }
+
+    let directOk = false;
+    let t0 = performance.now();
+    try {
+        const r = await ctuFetchTimeout(`${base}/models`, { headers: { Authorization: `Bearer ${s.apiKey}` } }, 15000);
+        directOk = true;
+        ctuLog("info", "1/4 Прямой запрос из браузера: ОК", { status: r.status, ms: Math.round(performance.now() - t0) });
+    } catch (e) {
+        ctuLog("error", "1/4 Прямой запрос из браузера: ОШИБКА", { err: e, ms: Math.round(performance.now() - t0) });
+        t0 = performance.now();
+        try {
+            await ctuFetchTimeout(`${base}/models`, { mode: "no-cors" }, 15000);
+            ctuLog("warn", "2/4 no-cors: сервер ДОСТУПЕН, значит браузер режет ответ из-за CORS (лечится запросом через ST)", { ms: Math.round(performance.now() - t0) });
+        } catch (e2) {
+            ctuLog("error", "2/4 no-cors: сервер НЕДОСТУПЕН из браузера (DNS / сеть / блокировка / неверный адрес / смешанный контент)", { err: e2 });
+        }
+    }
+    if (directOk) ctuLog("info", "2/4 no-cors: пропущено (прямой запрос работает)");
+
+    t0 = performance.now();
+    try {
+        const r = await ctuBackendFetch("/api/backends/chat-completions/status", {
+            chat_completion_source: "openai", reverse_proxy: base, proxy_password: s.apiKey,
+        });
+        const txt = await r.text();
+        ctuLog(r.ok ? "info" : "error", "3/4 Список моделей через сервер ST", { status: r.status, ms: Math.round(performance.now() - t0), preview: txt.slice(0, 400) });
+    } catch (e) {
+        ctuLog("error", "3/4 Сервер ST недоступен (запрос к /api/backends/...)", { err: e });
+    }
+
+    t0 = performance.now();
+    try {
+        const r = await ctuBackendFetch("/api/backends/chat-completions/generate", {
+            chat_completion_source: "openai", reverse_proxy: base, proxy_password: s.apiKey,
+            model: s.apiModel || "gpt-4o-mini", messages: [{ role: "user", content: "ping" }],
+            max_tokens: 16, stream: false, temperature: 0,
+        });
+        const txt = await r.text();
+        ctuLog(r.ok ? "info" : "error", "4/4 Тестовая генерация через сервер ST", { status: r.status, ms: Math.round(performance.now() - t0), preview: txt.slice(0, 500) });
+    } catch (e) {
+        ctuLog("error", "4/4 Тестовая генерация через ST: ОШИБКА", { err: e });
+    }
+    ctuLog("info", "━━━ ДИАГНОСТИКА ЗАВЕРШЕНА ━━━");
+    return "Готово";
+}
+
+function bindThemeAndLogEvents() {
+    const { saveSettingsDebounced } = SillyTavern.getContext();
+    const s = getSettings();
+    const $ = (id) => document.getElementById(id);
+    const msg = (text) => {
+        const el = $("ctu-log-msg");
+        if (!el) return;
+        el.textContent = text;
+        el.style.display = text ? "block" : "none";
+    };
+
+    $("ctu-theme-grid")?.addEventListener("click", (e) => {
+        const tile = e.target.closest(".ctu-theme-tile");
+        if (!tile) return;
+        s.theme = tile.dataset.theme;
+        saveSettingsDebounced();
+        applyTheme();
+        renderThemePicker();
+        ctuLog("info", "Тема: " + s.theme);
+    });
+
+    $("ctu-api-via-st")?.addEventListener("change", (e) => {
+        s.apiViaSt = e.target.checked;
+        saveSettingsDebounced();
+        ctuLog("info", "Всегда через сервер ST: " + s.apiViaSt);
+    });
+
+    $("ctu-log-details")?.addEventListener("toggle", ctuRefreshLogView);
+    $("ctu-log-refresh")?.addEventListener("click", () => { ctuRefreshLogView(); msg("Обновлено"); });
+
+    $("ctu-log-copy")?.addEventListener("click", async () => {
+        const text = ctuLogsAsText();
+        if (await ctuCopyText(text)) msg("✓ Скопировано в буфер обмена");
+        else {
+            const ta = $("ctu-log-view");
+            if (ta) { ta.value = text; ta.focus(); ta.select(); ta.setSelectionRange(0, text.length); }
+            msg("Автокопирование недоступно — текст выделен, выбери «Копировать» в меню телефона");
+        }
+    });
+
+    $("ctu-log-download")?.addEventListener("click", () => {
+        const d = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+        ctuDownloadText(`choice-tree-ui-log-${d}.txt`, ctuLogsAsText());
+        msg("Файл скачивается (папка «Загрузки»)");
+    });
+
+    const shareBtn = $("ctu-log-share");
+    if (shareBtn) {
+        if (navigator.share) {
+            shareBtn.addEventListener("click", async () => {
+                try { await navigator.share({ title: "Choice Tree UI — лог", text: ctuLogsAsText() }); }
+                catch (e) { if (e?.name !== "AbortError") msg("Не удалось поделиться: " + e.message); }
+            });
+        } else shareBtn.style.display = "none";
+    }
+
+    $("ctu-log-clear")?.addEventListener("click", () => {
+        ctuLogBuf = [];
+        ctuLogPersist();
+        ctuLog("info", "Лог очищен");
+        ctuRefreshLogView();
+        msg("Лог очищен");
+    });
+
+    $("ctu-log-diag")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        msg("Диагностика идёт… (до минуты)");
+        try {
+            const r = await ctuRunDiagnostics();
+            msg(r + " — нажми «Копировать» и пришли мне");
+        } catch (err) {
+            ctuLog("error", "Диагностика упала", err);
+            msg("Ошибка диагностики: " + err.message);
+        } finally {
+            btn.disabled = false;
+            const det = $("ctu-log-details");
+            if (det) det.open = true;
+            ctuRefreshLogView();
+        }
+    });
+}
+
 
 function ctuDebug(msg) {
     console.log(`[${MODULE_NAME}]`, msg);
@@ -107,7 +711,7 @@ function injectSettingsPanel() {
     panel.innerHTML = `
         <div class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
-                <b>✦ Choice Tree UI</b>
+                <b>✦ Choice Tree UI <span style="opacity:.45;font-size:10px;font-weight:400;">v${CTU_VERSION}</span></b>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
@@ -133,6 +737,28 @@ function injectSettingsPanel() {
                         <input type="range" id="ctu-max-choices" min="2" max="4" step="1" value="4"
                                class="neo-range-slider" style="width:100%;margin-top:6px;" />
                     </div>
+
+                    <hr class="sysHR" />
+
+                    <details id="ctu-theme-details">
+                        <summary style="cursor:pointer;font-size:12px;opacity:0.8;padding:4px 0;user-select:none;">
+                            🎨 Тема оформления
+                            <span id="ctu-theme-current" style="opacity:0.55;font-size:11px;margin-left:4px;"></span>
+                        </summary>
+                        <div id="ctu-theme-grid" class="ctu-theme-grid"></div>
+                        <div class="ctu-container ctu-preview">
+                            <div class="ctu-header">
+                                <span class="ctu-header-icon">✦</span>
+                                <span class="ctu-header-title">Предпросмотр</span>
+                            </div>
+                            <div class="ctu-grid">
+                                <div class="ctu-choice-btn ctu-tone-tender"><div class="ctu-btn-inner"><div class="ctu-btn-header"><span class="ctu-btn-icon">💙</span><span class="ctu-btn-label">Нежный</span></div><p class="ctu-btn-text">Тихо коснуться его руки и улыбнуться.</p></div><div class="ctu-btn-glow"></div></div>
+                                <div class="ctu-choice-btn ctu-tone-sharp"><div class="ctu-btn-inner"><div class="ctu-btn-header"><span class="ctu-btn-icon">🧊</span><span class="ctu-btn-label">Резкий</span></div><p class="ctu-btn-text">— Хватит играть. Скажи прямо.</p></div><div class="ctu-btn-glow"></div></div>
+                                <div class="ctu-choice-btn ctu-tone-bold"><div class="ctu-btn-inner"><div class="ctu-btn-header"><span class="ctu-btn-icon">🔥</span><span class="ctu-btn-label">Дерзкий</span></div><p class="ctu-btn-text">Шагнуть ближе и не отводить взгляд.</p></div><div class="ctu-btn-glow"></div></div>
+                                <div class="ctu-choice-btn ctu-tone-wild"><div class="ctu-btn-inner"><div class="ctu-btn-header"><span class="ctu-btn-icon">🎲</span><span class="ctu-btn-label">Дикий</span></div><p class="ctu-btn-text">Рассмеяться и утащить его на крышу.</p></div><div class="ctu-btn-glow"></div></div>
+                            </div>
+                        </div>
+                    </details>
 
                     <hr class="sysHR" />
 
@@ -291,6 +917,11 @@ function injectSettingsPanel() {
                                        value="💾 Сохранить как профиль" />
                             </div>
 
+                            <label class="checkbox_label" title="Запросы идут через сервер SillyTavern. Обходит CORS-блокировку браузера. Не работает, если API доступен только с твоего устройства, а ST запущен на другом.">
+                                <input type="checkbox" id="ctu-api-via-st" />
+                                <span>Всегда через сервер ST <span style="opacity:0.5;font-size:11px;">(обход CORS)</span></span>
+                            </label>
+
                             <div id="ctu-api-msg" style="font-size:11px;display:none;padding:5px 8px;
                                 border-radius:6px;"></div>
 
@@ -309,6 +940,33 @@ function injectSettingsPanel() {
                     <input type="button" id="ctu-generate-now"
                            class="menu_button wide100p"
                            value="✦ Сгенерировать варианты сейчас" />
+
+                    <hr class="sysHR" />
+
+                    <details id="ctu-log-details">
+                        <summary style="cursor:pointer;font-size:12px;opacity:0.8;padding:4px 0;user-select:none;">
+                            🪵 Логи и диагностика <span id="ctu-log-count" style="opacity:0.5;font-size:11px;"></span>
+                        </summary>
+                        <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;">
+                            <div style="font-size:10px;opacity:0.55;line-height:1.4;">
+                                Для проблем с подключением: нажми «Диагностика», потом «Копировать» (или «Скачать») и пришли текст.
+                                API-ключи и тексты чата в лог не попадают.
+                            </div>
+                            <input type="button" id="ctu-log-diag" class="menu_button wide100p" value="📡 Диагностика API" />
+                            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                                <input type="button" id="ctu-log-copy" class="menu_button" style="flex:1;" value="📋 Копировать" />
+                                <input type="button" id="ctu-log-download" class="menu_button" style="flex:1;" value="⬇ Скачать .txt" />
+                                <input type="button" id="ctu-log-share" class="menu_button" style="flex:1;" value="📤 Поделиться" />
+                            </div>
+                            <div style="display:flex;gap:6px;">
+                                <input type="button" id="ctu-log-refresh" class="menu_button" style="flex:1;" value="🔄 Обновить" />
+                                <input type="button" id="ctu-log-clear" class="menu_button" style="flex:1;" value="🗑 Очистить" />
+                            </div>
+                            <div id="ctu-log-msg" style="font-size:11px;display:none;padding:5px 8px;border-radius:6px;background:rgba(128,128,128,0.15);"></div>
+                            <textarea id="ctu-log-view" class="ctu-log-view" readonly spellcheck="false"
+                                      placeholder="Лог пуст. Вызови генерацию или нажми «Диагностика»."></textarea>
+                        </div>
+                    </details>
                 </div>
             </div>
         </div>`;
@@ -358,6 +1016,9 @@ function syncUI() {
     const active = getActivePresetObj();
     renderArchetypeRows(active?.archetypes || []);
     if ($("ctu-preset-name")) $("ctu-preset-name").value = s.activePreset || "";
+    if ($("ctu-api-via-st")) $("ctu-api-via-st").checked = !!s.apiViaSt;
+    renderThemePicker();
+    ctuRefreshLogView();
 }
 
 function populatePresetSelect() {
@@ -755,36 +1416,6 @@ function deleteApiProfile(name) {
     toastr.info(`Профиль "${name}" удалён`);
 }
 
-/**
- * Базовый URL кастомного API без хвоста /chat/completions.
- */
-function ctuBaseUrl(url) {
-    return String(url || "")
-        .trim()
-        .replace(/\/+$/, "")
-        .replace(/\/chat\/completions$/, "");
-}
-
-/**
- * [FIX CORS] Запрос к кастомному API через сервер SillyTavern.
- * Прямой fetch из браузера блокируется CORS у большинства провайдеров
- * (ошибка "Failed to fetch"). Сервер ST CORS не проверяет, поэтому
- * шлём запрос через встроенный бэкенд ST (источник "openai" +
- * reverse_proxy + proxy_password = наши URL и ключ).
- */
-async function ctuBackendFetch(path, payload) {
-    const ctx = SillyTavern.getContext();
-    const headers =
-        typeof ctx.getRequestHeaders === "function"
-            ? ctx.getRequestHeaders()
-            : { "Content-Type": "application/json" };
-    return fetch(path, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-    });
-}
-
 async function fetchAndShowModels() {
     const s = getSettings();
     if (!s.apiUrl || !s.apiKey) {
@@ -798,22 +1429,33 @@ async function fetchAndShowModels() {
     try {
         const base = ctuBaseUrl(s.apiUrl);
         let resp;
-        try {
-            resp = await fetch(`${base}/models`, {
-                headers: { Authorization: `Bearer ${s.apiKey}` },
-            });
-        } catch (netErr) {
-            // CORS / сеть: пробуем через сервер SillyTavern
-            ctuDebug(`models: прямой запрос не прошёл (${netErr.message}), иду через ST`);
-            resp = await ctuBackendFetch("/api/backends/chat-completions/status", {
+        const viaSt = () =>
+            ctuBackendFetch("/api/backends/chat-completions/status", {
                 chat_completion_source: "openai",
                 reverse_proxy: base,
                 proxy_password: s.apiKey,
             });
+        if (s.apiViaSt) {
+            resp = await viaSt();
+        } else {
+            try {
+                resp = await ctuFetchTimeout(`${base}/models`, {
+                    headers: { Authorization: `Bearer ${s.apiKey}` },
+                }, 20000);
+            } catch (netErr) {
+                ctuLog("warn", "models: прямой запрос не прошёл, иду через сервер ST", netErr);
+                resp = await viaSt();
+            }
         }
+        ctuLog("info", "models: ответ", { status: resp.status });
 
         if (!resp.ok) throw new Error(`${resp.status}`);
-        const data = await resp.json();
+        let data = await resp.json();
+        if (data?.error && !Array.isArray(data?.data)) {
+            ctuLog("error", "models: сервер ST не смог получить список", data);
+            throw new Error("сервер ST не получил список моделей (проверь URL и ключ)");
+        }
+        if (Array.isArray(data?.data?.data)) data = data.data;
 
         let models = [];
         if (Array.isArray(data.data)) {
@@ -895,6 +1537,8 @@ function bindSettingsEvents() {
     const { saveSettingsDebounced } = SillyTavern.getContext();
     const s = getSettings();
     const $ = (id) => document.getElementById(id);
+
+    bindThemeAndLogEvents();
 
     $("ctu-enabled")?.addEventListener("change", (e) => {
         s.enabled = e.target.checked;
@@ -1585,42 +2229,87 @@ async function callCustomApi(prompt) {
     const MAX_TOKENS = 8192;
 
     async function doFetch(body) {
-        let resp;
-        try {
-            resp = await fetch(endpoint, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${s.apiKey}`,
-                },
-                body: JSON.stringify(body),
+        const mixed = location.protocol === "https:" && endpoint.startsWith("http:");
+        ctuLog("info", "API → запрос", {
+            endpoint,
+            model: body.model,
+            mode: s.apiViaSt ? "через сервер ST" : "напрямую (с запасным путём через ST)",
+            promptChars: prompt.length,
+            tokenParam: body.max_completion_tokens ? "max_completion_tokens" : "max_tokens",
+            mixedContent: mixed,
+            online: navigator.onLine,
+        });
+
+        const viaSt = () =>
+            ctuBackendFetch("/api/backends/chat-completions/generate", {
+                ...body,
+                chat_completion_source: "openai",
+                reverse_proxy: baseUrl,
+                proxy_password: s.apiKey,
+                stream: false,
             });
-        } catch (err) {
-            // [FIX CORS] Браузер заблокировал запрос (CORS) — повторяем
-            // через сервер SillyTavern, где CORS не действует.
-            ctuDebug(`прямой запрос не прошёл (${err.message}), иду через ST`);
+
+        let resp;
+        let via = "direct";
+        const t0 = performance.now();
+
+        if (s.apiViaSt) {
+            via = "ST";
             try {
-                resp = await ctuBackendFetch("/api/backends/chat-completions/generate", {
-                    ...body,
-                    chat_completion_source: "openai",
-                    reverse_proxy: baseUrl,
-                    proxy_password: s.apiKey,
-                    stream: false,
+                resp = await viaSt();
+            } catch (err) {
+                ctuLog("error", "Запрос через сервер ST не удался", err);
+                throw new Error(`Network error (через сервер ST): ${err.message}. Открой «Логи» в настройках расширения.`);
+            }
+        } else {
+            try {
+                resp = await ctuFetchTimeout(endpoint, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${s.apiKey}`,
+                    },
+                    body: JSON.stringify(body),
+                }, 120000);
+            } catch (err) {
+                ctuLog("warn", "Прямой запрос не прошёл (скорее всего CORS/сеть) — пробую через сервер ST", {
+                    err,
+                    ms: Math.round(performance.now() - t0),
+                    mixedContent: mixed,
                 });
-            } catch (err2) {
-                throw new Error(
-                    `Network error: ${err.message}; через сервер ST тоже не удалось: ${err2.message}`,
-                );
+                via = "ST (запасной путь)";
+                try {
+                    resp = await viaSt();
+                } catch (err2) {
+                    ctuLog("error", "Запасной путь через сервер ST тоже не удался", err2);
+                    throw new Error(
+                        `Network error: напрямую — ${err.message}; через сервер ST — ${err2.message}. ` +
+                        `Открой «Логи» в настройках расширения и нажми «Диагностика».`,
+                    );
+                }
             }
         }
 
         const text = await resp.text().catch(() => "");
         let json;
+        let parseOk = true;
         try {
             json = JSON.parse(text);
         } catch (parseErr) {
+            parseOk = false;
+        }
+        ctuLog(resp.ok && parseOk ? "info" : "error", "API ← ответ", {
+            via,
+            status: resp.status,
+            statusText: resp.statusText,
+            ms: Math.round(performance.now() - t0),
+            contentType: resp.headers.get("content-type"),
+            bodyChars: text.length,
+            ...(resp.ok && parseOk ? {} : { bodyPreview: text.slice(0, 500) }),
+        });
+        if (!parseOk) {
             throw new Error(
-                `Invalid JSON response (HTTP ${resp.status}): ${text.slice(0, 200)}`,
+                `Invalid JSON response (HTTP ${resp.status}, ${via}): ${text.slice(0, 200)}`,
             );
         }
         return { resp, json };
@@ -2024,7 +2713,11 @@ function bindHooks() {
 
 (function init() {
     const { eventSource, event_types } = SillyTavern.getContext();
+    // тема нужна сразу, ещё до готовности приложения
+    try { applyTheme(); } catch (_) {}
+    ctuLog("info", `Расширение загружено, сборка ${CTU_VERSION}`);
     eventSource.on(event_types.APP_READY, () => {
+        applyTheme();
         injectSettingsPanel();
         injectButton();
         bindHooks();
