@@ -10,6 +10,9 @@
     --ctu-accent-glow: rgba(249, 168, 201, 0.25);
     --ctu-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
     --ctu-shadow-hover: 0 12px 40px rgba(0, 0, 0, 0.45);
+    --ctu-accent-rgb: 249, 168, 201;
+    --ctu-alt-rgb: 167, 210, 255;
+    --ctu-fg-rgb: 255, 255, 255;
     --ctu-radius: 14px;
     --ctu-radius-sm: 10px;
     --ctu-blur: blur(16px);
@@ -29,6 +32,9 @@
     margin: 8px 8px 14px;
     padding: 12px 14px;
     background: var(--ctu-bg-solid);
+    background-image: var(--ctu-pattern, none);
+    background-size: var(--ctu-pattern-size, auto);
+    font-family: var(--ctu-font, inherit);
     backdrop-filter: var(--ctu-blur);
     -webkit-backdrop-filter: var(--ctu-blur);
     border: 1px solid var(--ctu-border);
@@ -50,13 +56,9 @@
     left: 0;
     right: 0;
     height: 1px;
-    background: linear-gradient(
-        90deg,
-        transparent,
-        var(--ctu-accent),
-        rgba(167, 210, 255, 0.8),
-        var(--ctu-accent),
-        transparent
+    background: var(
+        --ctu-line,
+        linear-gradient(90deg, transparent, var(--ctu-accent), rgba(var(--ctu-alt-rgb), 0.8), var(--ctu-accent), transparent)
     );
     opacity: 0.6;
 }
@@ -66,10 +68,9 @@
     position: absolute;
     inset: 0;
     border-radius: var(--ctu-radius);
-    background: radial-gradient(
-        ellipse at 50% 0%,
-        var(--ctu-accent-glow),
-        transparent 70%
+    background: var(
+        --ctu-glow,
+        radial-gradient(ellipse at 50% 0%, var(--ctu-accent-glow), transparent 70%)
     );
     pointer-events: none;
     z-index: 0;
@@ -174,7 +175,7 @@
 .ctu-btn-icon {
     font-size: 13px;
     line-height: 1;
-    filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.2));
+    filter: drop-shadow(0 0 6px rgba(var(--ctu-fg-rgb), 0.2));
 }
 
 .ctu-btn-label {
@@ -203,7 +204,7 @@
     display: none;
     margin-top: 10px;
     padding-top: 10px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid rgba(var(--ctu-fg-rgb), 0.08);
     animation: ctu-expand-fade 0.22s ease;
 }
 
@@ -225,8 +226,8 @@
 
 .ctu-action-btn {
     appearance: none;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(var(--ctu-fg-rgb), 0.12);
+    background: rgba(var(--ctu-fg-rgb), 0.05);
     color: var(--ctu-text);
     border-radius: 8px;
     padding: 6px 10px;
@@ -237,8 +238,8 @@
 }
 
 .ctu-action-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: rgba(255, 255, 255, 0.2);
+    background: rgba(var(--ctu-fg-rgb), 0.1);
+    border-color: rgba(var(--ctu-fg-rgb), 0.2);
     transform: translateY(-1px);
 }
 
@@ -247,23 +248,23 @@
 }
 
 .ctu-action-btn--primary {
-    border-color: rgba(167, 210, 255, 0.28);
-    background: rgba(167, 210, 255, 0.1);
+    border-color: rgba(var(--ctu-alt-rgb), 0.28);
+    background: rgba(var(--ctu-alt-rgb), 0.1);
 }
 
 .ctu-action-btn--primary:hover {
-    border-color: rgba(167, 210, 255, 0.45);
-    background: rgba(167, 210, 255, 0.16);
+    border-color: rgba(var(--ctu-alt-rgb), 0.45);
+    background: rgba(var(--ctu-alt-rgb), 0.16);
 }
 
 .ctu-action-btn--accent {
-    border-color: rgba(249, 168, 201, 0.3);
-    background: rgba(249, 168, 201, 0.1);
+    border-color: rgba(var(--ctu-accent-rgb), 0.3);
+    background: rgba(var(--ctu-accent-rgb), 0.1);
 }
 
 .ctu-action-btn--accent:hover {
-    border-color: rgba(249, 168, 201, 0.5);
-    background: rgba(249, 168, 201, 0.18);
+    border-color: rgba(var(--ctu-accent-rgb), 0.5);
+    background: rgba(var(--ctu-accent-rgb), 0.18);
 }
 
 .ctu-choice-btn.ctu-expanded {
@@ -310,15 +311,15 @@
 
 @keyframes ctu-picked-flash {
     0% {
-        box-shadow: 0 0 0 rgba(249, 168, 201, 0);
+        box-shadow: 0 0 0 rgba(var(--ctu-accent-rgb), 0);
     }
     50% {
         box-shadow:
-            0 0 0 1px rgba(249, 168, 201, 0.45),
-            0 0 18px rgba(249, 168, 201, 0.18);
+            0 0 0 1px rgba(var(--ctu-accent-rgb), 0.45),
+            0 0 18px rgba(var(--ctu-accent-rgb), 0.18);
     }
     100% {
-        box-shadow: 0 0 0 rgba(249, 168, 201, 0);
+        box-shadow: 0 0 0 rgba(var(--ctu-accent-rgb), 0);
     }
 }
 
@@ -347,20 +348,20 @@
 }
 .ctu-tone-tender:hover,
 .ctu-tone-empathic:hover {
-    background: rgba(167, 210, 255, 0.22);
+    background: var(--ctu-empathic-h, rgba(var(--ctu-alt-rgb), 0.22));
     border-color: var(--ctu-empathic-b);
 }
 .ctu-tone-tender .ctu-btn-glow,
 .ctu-tone-empathic .ctu-btn-glow {
     background: radial-gradient(
         ellipse at 50% 100%,
-        rgba(167, 210, 255, 0.2),
+        var(--ctu-empathic-g, rgba(var(--ctu-alt-rgb), 0.2)),
         transparent 70%
     );
 }
 .ctu-tone-tender:hover .ctu-btn-label,
 .ctu-tone-empathic:hover .ctu-btn-label {
-    color: #a7d2ff;
+    color: var(--ctu-empathic-c, #a7d2ff);
 }
 
 .ctu-tone-sharp,
@@ -369,20 +370,20 @@
 }
 .ctu-tone-sharp:hover,
 .ctu-tone-logical:hover {
-    background: rgba(200, 220, 255, 0.2);
+    background: var(--ctu-logical-h, rgba(200, 220, 255, 0.2));
     border-color: var(--ctu-logical-b);
 }
 .ctu-tone-sharp .ctu-btn-glow,
 .ctu-tone-logical .ctu-btn-glow {
     background: radial-gradient(
         ellipse at 50% 100%,
-        rgba(200, 220, 255, 0.18),
+        var(--ctu-logical-g, rgba(200, 220, 255, 0.18)),
         transparent 70%
     );
 }
 .ctu-tone-sharp:hover .ctu-btn-label,
 .ctu-tone-logical:hover .ctu-btn-label {
-    color: #c8dcff;
+    color: var(--ctu-logical-c, #c8dcff);
 }
 
 .ctu-tone-bold,
@@ -391,20 +392,20 @@
 }
 .ctu-tone-bold:hover,
 .ctu-tone-aggressive:hover {
-    background: rgba(255, 180, 150, 0.22);
+    background: var(--ctu-aggressive-h, rgba(255, 180, 150, 0.22));
     border-color: var(--ctu-aggressive-b);
 }
 .ctu-tone-bold .ctu-btn-glow,
 .ctu-tone-aggressive .ctu-btn-glow {
     background: radial-gradient(
         ellipse at 50% 100%,
-        rgba(255, 180, 150, 0.2),
+        var(--ctu-aggressive-g, rgba(255, 180, 150, 0.2)),
         transparent 70%
     );
 }
 .ctu-tone-bold:hover .ctu-btn-label,
 .ctu-tone-aggressive:hover .ctu-btn-label {
-    color: #ffb496;
+    color: var(--ctu-aggressive-c, #ffb496);
 }
 
 .ctu-tone-wild,
@@ -413,20 +414,20 @@
 }
 .ctu-tone-wild:hover,
 .ctu-tone-chaotic:hover {
-    background: rgba(220, 170, 255, 0.22);
+    background: var(--ctu-chaotic-h, rgba(220, 170, 255, 0.22));
     border-color: var(--ctu-chaotic-b);
 }
 .ctu-tone-wild .ctu-btn-glow,
 .ctu-tone-chaotic .ctu-btn-glow {
     background: radial-gradient(
         ellipse at 50% 100%,
-        rgba(220, 170, 255, 0.2),
+        var(--ctu-chaotic-g, rgba(220, 170, 255, 0.2)),
         transparent 70%
     );
 }
 .ctu-tone-wild:hover .ctu-btn-label,
 .ctu-tone-chaotic:hover .ctu-btn-label {
-    color: #dcaaff;
+    color: var(--ctu-chaotic-c, #dcaaff);
 }
 
 .ctu-skeleton-grid {
@@ -448,7 +449,7 @@
 .ctu-skeleton-line {
     height: 9px;
     border-radius: 5px;
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(var(--ctu-fg-rgb), 0.08);
     margin-bottom: 8px;
 }
 
@@ -463,7 +464,7 @@
 
 #ctu-manual-btn.ctu-manual-btn {
     background: var(--ctu-accent-glow);
-    border: 1px solid rgba(249, 168, 201, 0.4);
+    border: 1px solid rgba(var(--ctu-accent-rgb), 0.4);
     border-radius: 8px;
     color: var(--ctu-accent);
     cursor: pointer;
@@ -473,15 +474,15 @@
     justify-content: center;
     transition: var(--ctu-transition-fast);
     margin-right: 4px;
-    box-shadow: 0 0 8px rgba(249, 168, 201, 0.2);
+    box-shadow: 0 0 8px rgba(var(--ctu-accent-rgb), 0.2);
     animation: ctu-btn-breathe 3s ease-in-out infinite;
 }
 
 #ctu-manual-btn.ctu-manual-btn:hover {
     border-color: var(--ctu-accent);
     color: #fff;
-    background: rgba(249, 168, 201, 0.3);
-    box-shadow: 0 0 16px rgba(249, 168, 201, 0.45);
+    background: rgba(var(--ctu-accent-rgb), 0.3);
+    box-shadow: 0 0 16px rgba(var(--ctu-accent-rgb), 0.45);
     animation: none;
     transform: translateY(-1px);
 }
@@ -564,12 +565,12 @@
 
 @keyframes ctu-btn-breathe {
     0%, 100% {
-        box-shadow: 0 0 6px rgba(249, 168, 201, 0.15);
-        border-color: rgba(249, 168, 201, 0.3);
+        box-shadow: 0 0 6px rgba(var(--ctu-accent-rgb), 0.15);
+        border-color: rgba(var(--ctu-accent-rgb), 0.3);
     }
     50% {
-        box-shadow: 0 0 14px rgba(249, 168, 201, 0.4);
-        border-color: rgba(249, 168, 201, 0.6);
+        box-shadow: 0 0 14px rgba(var(--ctu-accent-rgb), 0.4);
+        border-color: rgba(var(--ctu-accent-rgb), 0.6);
     }
 }
 
@@ -635,5 +636,726 @@ html[data-theme="light"] .ctu-container {
     --ctu-aggressive-b: rgba(220, 110, 70, 0.4);
     --ctu-chaotic: rgba(160, 90, 220, 0.1);
     --ctu-chaotic-b: rgba(160, 90, 220, 0.4);
+    --ctu-fg-rgb: 30, 20, 40;
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.1);
 }
+
+/* ═════════ ТЕМЫ ОФОРМЛЕНИЯ (генерируется) ═════════ */
+
+/* Лаковая шкатулка — чёрный лак, киноварь, золотая нить */
+:root[data-ctu-theme="lacquer"],
+:root[data-ctu-theme="lacquer"] body .ctu-container {
+    --ctu-bg: rgba(243,230,211, 0.06);
+    --ctu-bg-hover: rgba(243,230,211, 0.12);
+    --ctu-bg-solid: rgba(18,11,11,0.95);
+    --ctu-border: rgba(212,168,92, 0.24);
+    --ctu-border-hover: rgba(212,168,92, 0.6);
+    --ctu-text: rgba(243,230,211, 0.93);
+    --ctu-text-muted: rgba(243,230,211, 0.52);
+    --ctu-accent: #e2502f;
+    --ctu-accent-glow: rgba(226, 80, 47, 0.22);
+    --ctu-accent-rgb: 226, 80, 47;
+    --ctu-alt-rgb: 212, 168, 92;
+    --ctu-fg-rgb: 243,230,211;
+    --ctu-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    --ctu-shadow-hover: 0 12px 32px rgba(0, 0, 0, 0.35);
+    --ctu-radius: 6px;
+    --ctu-radius-sm: 4px;
+    --ctu-blur: blur(6px);
+    --ctu-line: linear-gradient(90deg, transparent, #d4a85c, transparent);
+    --ctu-glow: radial-gradient(ellipse at 50% 0%, rgba(226, 80, 47, 0.16), transparent 70%);
+    --ctu-pattern: repeating-linear-gradient(135deg, rgba(212,168,92,0.035) 0 1px, transparent 1px 9px);
+    --ctu-pattern-size: auto;
+    --ctu-font: Georgia, "Times New Roman", serif;
+    --ctu-empathic: rgba(232, 160, 160, 0.16);
+    --ctu-empathic-b: rgba(232, 160, 160, 0.5);
+    --ctu-empathic-h: rgba(232, 160, 160, 0.24);
+    --ctu-empathic-g: rgba(232, 160, 160, 0.24);
+    --ctu-empathic-c: #e8a0a0;
+    --ctu-logical: rgba(159, 180, 199, 0.16);
+    --ctu-logical-b: rgba(159, 180, 199, 0.5);
+    --ctu-logical-h: rgba(159, 180, 199, 0.24);
+    --ctu-logical-g: rgba(159, 180, 199, 0.24);
+    --ctu-logical-c: #9fb4c7;
+    --ctu-aggressive: rgba(226, 80, 47, 0.16);
+    --ctu-aggressive-b: rgba(226, 80, 47, 0.5);
+    --ctu-aggressive-h: rgba(226, 80, 47, 0.24);
+    --ctu-aggressive-g: rgba(226, 80, 47, 0.24);
+    --ctu-aggressive-c: #e2502f;
+    --ctu-chaotic: rgba(212, 168, 92, 0.16);
+    --ctu-chaotic-b: rgba(212, 168, 92, 0.5);
+    --ctu-chaotic-h: rgba(212, 168, 92, 0.24);
+    --ctu-chaotic-g: rgba(212, 168, 92, 0.24);
+    --ctu-chaotic-c: #d4a85c;
+}
+
+/* Патина — окисленная медь и бронза */
+:root[data-ctu-theme="verdigris"],
+:root[data-ctu-theme="verdigris"] body .ctu-container {
+    --ctu-bg: rgba(220,235,228, 0.06);
+    --ctu-bg-hover: rgba(220,235,228, 0.12);
+    --ctu-bg-solid: rgba(14,24,24,0.92);
+    --ctu-border: rgba(95,191,168, 0.24);
+    --ctu-border-hover: rgba(95,191,168, 0.6);
+    --ctu-text: rgba(220,235,228, 0.93);
+    --ctu-text-muted: rgba(220,235,228, 0.52);
+    --ctu-accent: #5fbfa8;
+    --ctu-accent-glow: rgba(95, 191, 168, 0.22);
+    --ctu-accent-rgb: 95, 191, 168;
+    --ctu-alt-rgb: 194, 138, 90;
+    --ctu-fg-rgb: 220,235,228;
+    --ctu-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    --ctu-shadow-hover: 0 12px 32px rgba(0, 0, 0, 0.35);
+    --ctu-radius: 12px;
+    --ctu-radius-sm: 9px;
+    --ctu-blur: blur(14px);
+    --ctu-line: linear-gradient(90deg, transparent, #c28a5a, #5fbfa8, #c28a5a, transparent);
+    --ctu-glow: radial-gradient(ellipse at 50% 0%, rgba(95, 191, 168, 0.18), transparent 70%);
+    --ctu-pattern: radial-gradient(circle at 18% 30%, rgba(95,191,168,0.09) 0 1.5px, transparent 2px), radial-gradient(circle at 72% 68%, rgba(194,138,90,0.08) 0 2px, transparent 3px);
+    --ctu-pattern-size: 46px 46px, 71px 71px;
+    --ctu-font: inherit;
+    --ctu-empathic: rgba(127, 208, 189, 0.16);
+    --ctu-empathic-b: rgba(127, 208, 189, 0.5);
+    --ctu-empathic-h: rgba(127, 208, 189, 0.24);
+    --ctu-empathic-g: rgba(127, 208, 189, 0.24);
+    --ctu-empathic-c: #7fd0bd;
+    --ctu-logical: rgba(143, 178, 196, 0.16);
+    --ctu-logical-b: rgba(143, 178, 196, 0.5);
+    --ctu-logical-h: rgba(143, 178, 196, 0.24);
+    --ctu-logical-g: rgba(143, 178, 196, 0.24);
+    --ctu-logical-c: #8fb2c4;
+    --ctu-aggressive: rgba(208, 138, 92, 0.16);
+    --ctu-aggressive-b: rgba(208, 138, 92, 0.5);
+    --ctu-aggressive-h: rgba(208, 138, 92, 0.24);
+    --ctu-aggressive-g: rgba(208, 138, 92, 0.24);
+    --ctu-aggressive-c: #d08a5c;
+    --ctu-chaotic: rgba(181, 163, 214, 0.16);
+    --ctu-chaotic-b: rgba(181, 163, 214, 0.5);
+    --ctu-chaotic-h: rgba(181, 163, 214, 0.24);
+    --ctu-chaotic-g: rgba(181, 163, 214, 0.24);
+    --ctu-chaotic-c: #b5a3d6;
+}
+
+/* Мотылёк — тёплая тьма и лунный свет лампы */
+:root[data-ctu-theme="moth"],
+:root[data-ctu-theme="moth"] body .ctu-container {
+    --ctu-bg: rgba(241,232,212, 0.06);
+    --ctu-bg-hover: rgba(241,232,212, 0.12);
+    --ctu-bg-solid: rgba(26,20,16,0.92);
+    --ctu-border: rgba(242,227,161, 0.24);
+    --ctu-border-hover: rgba(242,227,161, 0.6);
+    --ctu-text: rgba(241,232,212, 0.93);
+    --ctu-text-muted: rgba(241,232,212, 0.52);
+    --ctu-accent: #f2e3a1;
+    --ctu-accent-glow: rgba(242, 227, 161, 0.22);
+    --ctu-accent-rgb: 242, 227, 161;
+    --ctu-alt-rgb: 217, 183, 121;
+    --ctu-fg-rgb: 241,232,212;
+    --ctu-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    --ctu-shadow-hover: 0 12px 32px rgba(0, 0, 0, 0.35);
+    --ctu-radius: 18px;
+    --ctu-radius-sm: 13px;
+    --ctu-blur: blur(22px);
+    --ctu-line: linear-gradient(90deg, transparent, rgba(242,227,161,0.9), transparent);
+    --ctu-glow: radial-gradient(ellipse at 50% -10%, rgba(242, 227, 161, 0.24), transparent 65%);
+    --ctu-pattern: none;
+    --ctu-pattern-size: auto;
+    --ctu-font: inherit;
+    --ctu-empathic: rgba(240, 217, 160, 0.16);
+    --ctu-empathic-b: rgba(240, 217, 160, 0.5);
+    --ctu-empathic-h: rgba(240, 217, 160, 0.24);
+    --ctu-empathic-g: rgba(240, 217, 160, 0.24);
+    --ctu-empathic-c: #f0d9a0;
+    --ctu-logical: rgba(185, 196, 176, 0.16);
+    --ctu-logical-b: rgba(185, 196, 176, 0.5);
+    --ctu-logical-h: rgba(185, 196, 176, 0.24);
+    --ctu-logical-g: rgba(185, 196, 176, 0.24);
+    --ctu-logical-c: #b9c4b0;
+    --ctu-aggressive: rgba(224, 160, 112, 0.16);
+    --ctu-aggressive-b: rgba(224, 160, 112, 0.5);
+    --ctu-aggressive-h: rgba(224, 160, 112, 0.24);
+    --ctu-aggressive-g: rgba(224, 160, 112, 0.24);
+    --ctu-aggressive-c: #e0a070;
+    --ctu-chaotic: rgba(205, 180, 216, 0.16);
+    --ctu-chaotic-b: rgba(205, 180, 216, 0.5);
+    --ctu-chaotic-h: rgba(205, 180, 216, 0.24);
+    --ctu-chaotic-g: rgba(205, 180, 216, 0.24);
+    --ctu-chaotic-c: #cdb4d8;
+}
+
+/* Цианотипия — синька, чертёжная сетка */
+:root[data-ctu-theme="cyanotype"],
+:root[data-ctu-theme="cyanotype"] body .ctu-container {
+    --ctu-bg: rgba(232,241,255, 0.06);
+    --ctu-bg-hover: rgba(232,241,255, 0.12);
+    --ctu-bg-solid: rgba(10,36,84,0.94);
+    --ctu-border: rgba(207,227,255, 0.24);
+    --ctu-border-hover: rgba(207,227,255, 0.6);
+    --ctu-text: rgba(232,241,255, 0.93);
+    --ctu-text-muted: rgba(232,241,255, 0.52);
+    --ctu-accent: #cfe3ff;
+    --ctu-accent-glow: rgba(207, 227, 255, 0.22);
+    --ctu-accent-rgb: 207, 227, 255;
+    --ctu-alt-rgb: 127, 176, 255;
+    --ctu-fg-rgb: 232,241,255;
+    --ctu-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    --ctu-shadow-hover: 0 12px 32px rgba(0, 0, 0, 0.35);
+    --ctu-radius: 3px;
+    --ctu-radius-sm: 2px;
+    --ctu-blur: none;
+    --ctu-line: linear-gradient(90deg, transparent, #cfe3ff, transparent);
+    --ctu-glow: radial-gradient(ellipse at 50% 0%, rgba(127, 176, 255, 0.2), transparent 70%);
+    --ctu-pattern: linear-gradient(rgba(255,255,255,0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.07) 1px, transparent 1px);
+    --ctu-pattern-size: 18px 18px;
+    --ctu-font: ui-monospace, "Courier New", monospace;
+    --ctu-empathic: rgba(174, 224, 255, 0.16);
+    --ctu-empathic-b: rgba(174, 224, 255, 0.5);
+    --ctu-empathic-h: rgba(174, 224, 255, 0.24);
+    --ctu-empathic-g: rgba(174, 224, 255, 0.24);
+    --ctu-empathic-c: #aee0ff;
+    --ctu-logical: rgba(255, 255, 255, 0.16);
+    --ctu-logical-b: rgba(255, 255, 255, 0.5);
+    --ctu-logical-h: rgba(255, 255, 255, 0.24);
+    --ctu-logical-g: rgba(255, 255, 255, 0.24);
+    --ctu-logical-c: #ffffff;
+    --ctu-aggressive: rgba(255, 210, 122, 0.16);
+    --ctu-aggressive-b: rgba(255, 210, 122, 0.5);
+    --ctu-aggressive-h: rgba(255, 210, 122, 0.24);
+    --ctu-aggressive-g: rgba(255, 210, 122, 0.24);
+    --ctu-aggressive-c: #ffd27a;
+    --ctu-chaotic: rgba(255, 158, 193, 0.16);
+    --ctu-chaotic-b: rgba(255, 158, 193, 0.5);
+    --ctu-chaotic-h: rgba(255, 158, 193, 0.24);
+    --ctu-chaotic-g: rgba(255, 158, 193, 0.24);
+    --ctu-chaotic-c: #ff9ec1;
+}
+
+/* Бордо и сливки — кремовая бумага, цвет бычьей крови */
+:root[data-ctu-theme="oxblood"],
+:root[data-ctu-theme="oxblood"] body .ctu-container {
+    --ctu-bg: rgba(58,18,24, 0.04);
+    --ctu-bg-hover: rgba(58,18,24, 0.07);
+    --ctu-bg-solid: rgba(250,243,230,0.97);
+    --ctu-border: rgba(125,31,44, 0.24);
+    --ctu-border-hover: rgba(125,31,44, 0.6);
+    --ctu-text: rgba(58,18,24, 0.93);
+    --ctu-text-muted: rgba(58,18,24, 0.52);
+    --ctu-accent: #7d1f2c;
+    --ctu-accent-glow: rgba(125, 31, 44, 0.14);
+    --ctu-accent-rgb: 125, 31, 44;
+    --ctu-alt-rgb: 176, 138, 74;
+    --ctu-fg-rgb: 58,18,24;
+    --ctu-shadow: 0 6px 22px rgba(80,20,30,0.16);
+    --ctu-shadow-hover: 0 10px 22px rgba(80,20,30,0.16);
+    --ctu-radius: 10px;
+    --ctu-radius-sm: 7px;
+    --ctu-blur: none;
+    --ctu-line: linear-gradient(90deg, transparent, #7d1f2c, #b08a4a, #7d1f2c, transparent);
+    --ctu-glow: radial-gradient(ellipse at 50% 0%, rgba(125, 31, 44, 0.08), transparent 70%);
+    --ctu-pattern: repeating-linear-gradient(0deg, transparent 0 27px, rgba(125,31,44,0.05) 27px 28px);
+    --ctu-pattern-size: auto;
+    --ctu-font: Georgia, "Times New Roman", serif;
+    --ctu-empathic: rgba(181, 84, 106, 0.12);
+    --ctu-empathic-b: rgba(181, 84, 106, 0.5);
+    --ctu-empathic-h: rgba(181, 84, 106, 0.18);
+    --ctu-empathic-g: rgba(181, 84, 106, 0.2);
+    --ctu-empathic-c: #b5546a;
+    --ctu-logical: rgba(79, 107, 122, 0.12);
+    --ctu-logical-b: rgba(79, 107, 122, 0.5);
+    --ctu-logical-h: rgba(79, 107, 122, 0.18);
+    --ctu-logical-g: rgba(79, 107, 122, 0.2);
+    --ctu-logical-c: #4f6b7a;
+    --ctu-aggressive: rgba(176, 69, 42, 0.12);
+    --ctu-aggressive-b: rgba(176, 69, 42, 0.5);
+    --ctu-aggressive-h: rgba(176, 69, 42, 0.18);
+    --ctu-aggressive-g: rgba(176, 69, 42, 0.2);
+    --ctu-aggressive-c: #b0452a;
+    --ctu-chaotic: rgba(107, 74, 140, 0.12);
+    --ctu-chaotic-b: rgba(107, 74, 140, 0.5);
+    --ctu-chaotic-h: rgba(107, 74, 140, 0.18);
+    --ctu-chaotic-g: rgba(107, 74, 140, 0.2);
+    --ctu-chaotic-c: #6b4a8c;
+}
+
+/* Дымчатый янтарь — густой мёд за тёмным стеклом */
+:root[data-ctu-theme="amber"],
+:root[data-ctu-theme="amber"] body .ctu-container {
+    --ctu-bg: rgba(247,232,204, 0.06);
+    --ctu-bg-hover: rgba(247,232,204, 0.12);
+    --ctu-bg-solid: rgba(28,18,8,0.9);
+    --ctu-border: rgba(240,168,48, 0.24);
+    --ctu-border-hover: rgba(240,168,48, 0.6);
+    --ctu-text: rgba(247,232,204, 0.93);
+    --ctu-text-muted: rgba(247,232,204, 0.52);
+    --ctu-accent: #f0a830;
+    --ctu-accent-glow: rgba(240, 168, 48, 0.22);
+    --ctu-accent-rgb: 240, 168, 48;
+    --ctu-alt-rgb: 255, 210, 122;
+    --ctu-fg-rgb: 247,232,204;
+    --ctu-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    --ctu-shadow-hover: 0 12px 32px rgba(0, 0, 0, 0.35);
+    --ctu-radius: 16px;
+    --ctu-radius-sm: 11px;
+    --ctu-blur: blur(24px);
+    --ctu-line: linear-gradient(90deg, transparent, #f0a830, #ffd27a, #f0a830, transparent);
+    --ctu-glow: radial-gradient(ellipse at 15% 100%, rgba(240, 168, 48, 0.26), transparent 65%);
+    --ctu-pattern: none;
+    --ctu-pattern-size: auto;
+    --ctu-font: inherit;
+    --ctu-empathic: rgba(255, 207, 138, 0.16);
+    --ctu-empathic-b: rgba(255, 207, 138, 0.5);
+    --ctu-empathic-h: rgba(255, 207, 138, 0.24);
+    --ctu-empathic-g: rgba(255, 207, 138, 0.24);
+    --ctu-empathic-c: #ffcf8a;
+    --ctu-logical: rgba(201, 185, 154, 0.16);
+    --ctu-logical-b: rgba(201, 185, 154, 0.5);
+    --ctu-logical-h: rgba(201, 185, 154, 0.24);
+    --ctu-logical-g: rgba(201, 185, 154, 0.24);
+    --ctu-logical-c: #c9b99a;
+    --ctu-aggressive: rgba(255, 138, 76, 0.16);
+    --ctu-aggressive-b: rgba(255, 138, 76, 0.5);
+    --ctu-aggressive-h: rgba(255, 138, 76, 0.24);
+    --ctu-aggressive-g: rgba(255, 138, 76, 0.24);
+    --ctu-aggressive-c: #ff8a4c;
+    --ctu-chaotic: rgba(199, 162, 232, 0.16);
+    --ctu-chaotic-b: rgba(199, 162, 232, 0.5);
+    --ctu-chaotic-h: rgba(199, 162, 232, 0.24);
+    --ctu-chaotic-g: rgba(199, 162, 232, 0.24);
+    --ctu-chaotic-c: #c7a2e8;
+}
+
+/* Опал — перламутровые переливы */
+:root[data-ctu-theme="opal"],
+:root[data-ctu-theme="opal"] body .ctu-container {
+    --ctu-bg: rgba(42,39,64, 0.04);
+    --ctu-bg-hover: rgba(42,39,64, 0.07);
+    --ctu-bg-solid: rgba(250,250,253,0.92);
+    --ctu-border: rgba(122,111,240, 0.24);
+    --ctu-border-hover: rgba(122,111,240, 0.6);
+    --ctu-text: rgba(42,39,64, 0.93);
+    --ctu-text-muted: rgba(42,39,64, 0.52);
+    --ctu-accent: #7a6ff0;
+    --ctu-accent-glow: rgba(122, 111, 240, 0.14);
+    --ctu-accent-rgb: 122, 111, 240;
+    --ctu-alt-rgb: 63, 194, 181;
+    --ctu-fg-rgb: 42,39,64;
+    --ctu-shadow: 0 8px 28px rgba(90,80,170,0.16);
+    --ctu-shadow-hover: 0 12px 28px rgba(90,80,170,0.16);
+    --ctu-radius: 16px;
+    --ctu-radius-sm: 12px;
+    --ctu-blur: blur(14px);
+    --ctu-line: linear-gradient(90deg, #ffc6e0, #c6d4ff, #c6fff0, #fff0c6, #ffc6e0);
+    --ctu-glow: radial-gradient(ellipse at 20% 0%, rgba(255,190,230,0.38), transparent 55%), radial-gradient(ellipse at 85% 10%, rgba(170,220,255,0.38), transparent 55%), radial-gradient(ellipse at 50% 100%, rgba(190,255,230,0.32), transparent 60%);
+    --ctu-pattern: none;
+    --ctu-pattern-size: auto;
+    --ctu-font: inherit;
+    --ctu-empathic: rgba(224, 98, 154, 0.12);
+    --ctu-empathic-b: rgba(224, 98, 154, 0.5);
+    --ctu-empathic-h: rgba(224, 98, 154, 0.18);
+    --ctu-empathic-g: rgba(224, 98, 154, 0.2);
+    --ctu-empathic-c: #e0629a;
+    --ctu-logical: rgba(74, 127, 208, 0.12);
+    --ctu-logical-b: rgba(74, 127, 208, 0.5);
+    --ctu-logical-h: rgba(74, 127, 208, 0.18);
+    --ctu-logical-g: rgba(74, 127, 208, 0.2);
+    --ctu-logical-c: #4a7fd0;
+    --ctu-aggressive: rgba(224, 138, 58, 0.12);
+    --ctu-aggressive-b: rgba(224, 138, 58, 0.5);
+    --ctu-aggressive-h: rgba(224, 138, 58, 0.18);
+    --ctu-aggressive-g: rgba(224, 138, 58, 0.2);
+    --ctu-aggressive-c: #e08a3a;
+    --ctu-chaotic: rgba(138, 95, 224, 0.12);
+    --ctu-chaotic-b: rgba(138, 95, 224, 0.5);
+    --ctu-chaotic-h: rgba(138, 95, 224, 0.18);
+    --ctu-chaotic-g: rgba(138, 95, 224, 0.2);
+    --ctu-chaotic-c: #8a5fe0;
+}
+
+/* Ртуть — холодный хром, жидкий металл */
+:root[data-ctu-theme="mercury"],
+:root[data-ctu-theme="mercury"] body .ctu-container {
+    --ctu-bg: rgba(238,241,245, 0.06);
+    --ctu-bg-hover: rgba(238,241,245, 0.12);
+    --ctu-bg-solid: rgba(20,22,26,0.92);
+    --ctu-border: rgba(215,221,230, 0.24);
+    --ctu-border-hover: rgba(215,221,230, 0.6);
+    --ctu-text: rgba(238,241,245, 0.93);
+    --ctu-text-muted: rgba(238,241,245, 0.52);
+    --ctu-accent: #d7dde6;
+    --ctu-accent-glow: rgba(215, 221, 230, 0.22);
+    --ctu-accent-rgb: 215, 221, 230;
+    --ctu-alt-rgb: 143, 163, 184;
+    --ctu-fg-rgb: 238,241,245;
+    --ctu-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    --ctu-shadow-hover: 0 12px 32px rgba(0, 0, 0, 0.35);
+    --ctu-radius: 12px;
+    --ctu-radius-sm: 9px;
+    --ctu-blur: blur(16px);
+    --ctu-line: linear-gradient(90deg, transparent, #ffffff, #8fa3b8, #ffffff, transparent);
+    --ctu-glow: radial-gradient(ellipse at 50% 0%, rgba(215, 221, 230, 0.14), transparent 70%);
+    --ctu-pattern: linear-gradient(135deg, rgba(255,255,255,0.09), transparent 30%, rgba(255,255,255,0.05) 60%, transparent 85%);
+    --ctu-pattern-size: auto;
+    --ctu-font: inherit;
+    --ctu-empathic: rgba(184, 212, 232, 0.16);
+    --ctu-empathic-b: rgba(184, 212, 232, 0.5);
+    --ctu-empathic-h: rgba(184, 212, 232, 0.24);
+    --ctu-empathic-g: rgba(184, 212, 232, 0.24);
+    --ctu-empathic-c: #b8d4e8;
+    --ctu-logical: rgba(226, 230, 236, 0.16);
+    --ctu-logical-b: rgba(226, 230, 236, 0.5);
+    --ctu-logical-h: rgba(226, 230, 236, 0.24);
+    --ctu-logical-g: rgba(226, 230, 236, 0.24);
+    --ctu-logical-c: #e2e6ec;
+    --ctu-aggressive: rgba(201, 169, 160, 0.16);
+    --ctu-aggressive-b: rgba(201, 169, 160, 0.5);
+    --ctu-aggressive-h: rgba(201, 169, 160, 0.24);
+    --ctu-aggressive-g: rgba(201, 169, 160, 0.24);
+    --ctu-aggressive-c: #c9a9a0;
+    --ctu-chaotic: rgba(169, 180, 216, 0.16);
+    --ctu-chaotic-b: rgba(169, 180, 216, 0.5);
+    --ctu-chaotic-h: rgba(169, 180, 216, 0.24);
+    --ctu-chaotic-g: rgba(169, 180, 216, 0.24);
+    --ctu-chaotic-c: #a9b4d8;
+}
+
+/* Зола и угли — пепел, под которым тлеет жар */
+:root[data-ctu-theme="ember"],
+:root[data-ctu-theme="ember"] body .ctu-container {
+    --ctu-bg: rgba(233,226,220, 0.06);
+    --ctu-bg-hover: rgba(233,226,220, 0.12);
+    --ctu-bg-solid: rgba(24,22,22,0.94);
+    --ctu-border: rgba(255,106,43, 0.24);
+    --ctu-border-hover: rgba(255,106,43, 0.6);
+    --ctu-text: rgba(233,226,220, 0.93);
+    --ctu-text-muted: rgba(233,226,220, 0.52);
+    --ctu-accent: #ff6a2b;
+    --ctu-accent-glow: rgba(255, 106, 43, 0.22);
+    --ctu-accent-rgb: 255, 106, 43;
+    --ctu-alt-rgb: 255, 179, 71;
+    --ctu-fg-rgb: 233,226,220;
+    --ctu-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    --ctu-shadow-hover: 0 12px 32px rgba(0, 0, 0, 0.35);
+    --ctu-radius: 8px;
+    --ctu-radius-sm: 6px;
+    --ctu-blur: blur(10px);
+    --ctu-line: linear-gradient(90deg, transparent, #ff6a2b, #ffb347, #ff6a2b, transparent);
+    --ctu-glow: radial-gradient(ellipse at 50% 125%, rgba(255, 106, 43, 0.30), transparent 60%);
+    --ctu-pattern: radial-gradient(circle at 20% 30%, rgba(255,150,60,0.28) 0 1px, transparent 2px), radial-gradient(circle at 75% 60%, rgba(255,106,43,0.22) 0 1px, transparent 2px);
+    --ctu-pattern-size: 58px 58px, 91px 91px;
+    --ctu-font: inherit;
+    --ctu-empathic: rgba(255, 179, 138, 0.16);
+    --ctu-empathic-b: rgba(255, 179, 138, 0.5);
+    --ctu-empathic-h: rgba(255, 179, 138, 0.24);
+    --ctu-empathic-g: rgba(255, 179, 138, 0.24);
+    --ctu-empathic-c: #ffb38a;
+    --ctu-logical: rgba(154, 167, 176, 0.16);
+    --ctu-logical-b: rgba(154, 167, 176, 0.5);
+    --ctu-logical-h: rgba(154, 167, 176, 0.24);
+    --ctu-logical-g: rgba(154, 167, 176, 0.24);
+    --ctu-logical-c: #9aa7b0;
+    --ctu-aggressive: rgba(255, 106, 43, 0.16);
+    --ctu-aggressive-b: rgba(255, 106, 43, 0.5);
+    --ctu-aggressive-h: rgba(255, 106, 43, 0.24);
+    --ctu-aggressive-g: rgba(255, 106, 43, 0.24);
+    --ctu-aggressive-c: #ff6a2b;
+    --ctu-chaotic: rgba(232, 93, 154, 0.16);
+    --ctu-chaotic-b: rgba(232, 93, 154, 0.5);
+    --ctu-chaotic-h: rgba(232, 93, 154, 0.24);
+    --ctu-chaotic-g: rgba(232, 93, 154, 0.24);
+    --ctu-chaotic-c: #e85d9a;
+}
+
+/* Индиго и шафран — крашеная ткань, золотая нить */
+:root[data-ctu-theme="indigo"],
+:root[data-ctu-theme="indigo"] body .ctu-container {
+    --ctu-bg: rgba(236,232,220, 0.06);
+    --ctu-bg-hover: rgba(236,232,220, 0.12);
+    --ctu-bg-solid: rgba(19,24,58,0.94);
+    --ctu-border: rgba(244,185,66, 0.24);
+    --ctu-border-hover: rgba(244,185,66, 0.6);
+    --ctu-text: rgba(236,232,220, 0.93);
+    --ctu-text-muted: rgba(236,232,220, 0.52);
+    --ctu-accent: #f4b942;
+    --ctu-accent-glow: rgba(244, 185, 66, 0.22);
+    --ctu-accent-rgb: 244, 185, 66;
+    --ctu-alt-rgb: 159, 176, 255;
+    --ctu-fg-rgb: 236,232,220;
+    --ctu-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    --ctu-shadow-hover: 0 12px 32px rgba(0, 0, 0, 0.35);
+    --ctu-radius: 10px;
+    --ctu-radius-sm: 7px;
+    --ctu-blur: blur(8px);
+    --ctu-line: linear-gradient(90deg, transparent, #f4b942, transparent);
+    --ctu-glow: radial-gradient(ellipse at 50% 0%, rgba(159, 176, 255, 0.2), transparent 70%);
+    --ctu-pattern: repeating-linear-gradient(45deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 9px), repeating-linear-gradient(-45deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 9px);
+    --ctu-pattern-size: auto;
+    --ctu-font: inherit;
+    --ctu-empathic: rgba(169, 184, 255, 0.16);
+    --ctu-empathic-b: rgba(169, 184, 255, 0.5);
+    --ctu-empathic-h: rgba(169, 184, 255, 0.24);
+    --ctu-empathic-g: rgba(169, 184, 255, 0.24);
+    --ctu-empathic-c: #a9b8ff;
+    --ctu-logical: rgba(216, 212, 196, 0.16);
+    --ctu-logical-b: rgba(216, 212, 196, 0.5);
+    --ctu-logical-h: rgba(216, 212, 196, 0.24);
+    --ctu-logical-g: rgba(216, 212, 196, 0.24);
+    --ctu-logical-c: #d8d4c4;
+    --ctu-aggressive: rgba(244, 185, 66, 0.16);
+    --ctu-aggressive-b: rgba(244, 185, 66, 0.5);
+    --ctu-aggressive-h: rgba(244, 185, 66, 0.24);
+    --ctu-aggressive-g: rgba(244, 185, 66, 0.24);
+    --ctu-aggressive-c: #f4b942;
+    --ctu-chaotic: rgba(240, 138, 180, 0.16);
+    --ctu-chaotic-b: rgba(240, 138, 180, 0.5);
+    --ctu-chaotic-h: rgba(240, 138, 180, 0.24);
+    --ctu-chaotic-g: rgba(240, 138, 180, 0.24);
+    --ctu-chaotic-c: #f08ab4;
+}
+
+/* Лишайник — матовый камень, мох и тишина */
+:root[data-ctu-theme="lichen"],
+:root[data-ctu-theme="lichen"] body .ctu-container {
+    --ctu-bg: rgba(228,232,220, 0.06);
+    --ctu-bg-hover: rgba(228,232,220, 0.12);
+    --ctu-bg-solid: rgba(34,38,34,0.95);
+    --ctu-border: rgba(169,196,138, 0.24);
+    --ctu-border-hover: rgba(169,196,138, 0.6);
+    --ctu-text: rgba(228,232,220, 0.93);
+    --ctu-text-muted: rgba(228,232,220, 0.52);
+    --ctu-accent: #a9c48a;
+    --ctu-accent-glow: rgba(169, 196, 138, 0.22);
+    --ctu-accent-rgb: 169, 196, 138;
+    --ctu-alt-rgb: 214, 197, 138;
+    --ctu-fg-rgb: 228,232,220;
+    --ctu-shadow: 0 6px 20px rgba(0,0,0,0.28);
+    --ctu-shadow-hover: 0 10px 20px rgba(0,0,0,0.28);
+    --ctu-radius: 14px;
+    --ctu-radius-sm: 10px;
+    --ctu-blur: none;
+    --ctu-line: linear-gradient(90deg, transparent, #a9c48a, #d6c58a, transparent);
+    --ctu-glow: radial-gradient(ellipse at 50% 0%, rgba(169, 196, 138, 0.12), transparent 70%);
+    --ctu-pattern: radial-gradient(circle at 12% 22%, rgba(169,196,138,0.10) 0 6px, transparent 7px), radial-gradient(circle at 70% 60%, rgba(214,197,138,0.08) 0 10px, transparent 11px), radial-gradient(circle at 40% 88%, rgba(169,196,138,0.08) 0 4px, transparent 5px);
+    --ctu-pattern-size: 140px 140px, 210px 210px, 100px 100px;
+    --ctu-font: inherit;
+    --ctu-empathic: rgba(185, 212, 160, 0.16);
+    --ctu-empathic-b: rgba(185, 212, 160, 0.5);
+    --ctu-empathic-h: rgba(185, 212, 160, 0.24);
+    --ctu-empathic-g: rgba(185, 212, 160, 0.24);
+    --ctu-empathic-c: #b9d4a0;
+    --ctu-logical: rgba(157, 181, 184, 0.16);
+    --ctu-logical-b: rgba(157, 181, 184, 0.5);
+    --ctu-logical-h: rgba(157, 181, 184, 0.24);
+    --ctu-logical-g: rgba(157, 181, 184, 0.24);
+    --ctu-logical-c: #9db5b8;
+    --ctu-aggressive: rgba(217, 160, 102, 0.16);
+    --ctu-aggressive-b: rgba(217, 160, 102, 0.5);
+    --ctu-aggressive-h: rgba(217, 160, 102, 0.24);
+    --ctu-aggressive-g: rgba(217, 160, 102, 0.24);
+    --ctu-aggressive-c: #d9a066;
+    --ctu-chaotic: rgba(187, 160, 200, 0.16);
+    --ctu-chaotic-b: rgba(187, 160, 200, 0.5);
+    --ctu-chaotic-h: rgba(187, 160, 200, 0.24);
+    --ctu-chaotic-g: rgba(187, 160, 200, 0.24);
+    --ctu-chaotic-c: #bba0c8;
+}
+
+/* Бумажный фонарь — рисовая бумага и тёплое свечение */
+:root[data-ctu-theme="lantern"],
+:root[data-ctu-theme="lantern"] body .ctu-container {
+    --ctu-bg: rgba(74,47,26, 0.04);
+    --ctu-bg-hover: rgba(74,47,26, 0.07);
+    --ctu-bg-solid: rgba(255,248,234,0.97);
+    --ctu-border: rgba(224,112,42, 0.24);
+    --ctu-border-hover: rgba(224,112,42, 0.6);
+    --ctu-text: rgba(74,47,26, 0.93);
+    --ctu-text-muted: rgba(74,47,26, 0.52);
+    --ctu-accent: #e0702a;
+    --ctu-accent-glow: rgba(224, 112, 42, 0.14);
+    --ctu-accent-rgb: 224, 112, 42;
+    --ctu-alt-rgb: 217, 164, 65;
+    --ctu-fg-rgb: 74,47,26;
+    --ctu-shadow: 0 6px 22px rgba(120,70,20,0.18);
+    --ctu-shadow-hover: 0 10px 22px rgba(120,70,20,0.18);
+    --ctu-radius: 4px;
+    --ctu-radius-sm: 3px;
+    --ctu-blur: none;
+    --ctu-line: linear-gradient(90deg, transparent, #e0702a, #d9a441, #e0702a, transparent);
+    --ctu-glow: radial-gradient(ellipse at 50% 50%, rgba(255, 170, 80, 0.24), transparent 75%);
+    --ctu-pattern: linear-gradient(rgba(74,47,26,0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(74,47,26,0.07) 1px, transparent 1px);
+    --ctu-pattern-size: 44px 44px;
+    --ctu-font: inherit;
+    --ctu-empathic: rgba(217, 121, 138, 0.12);
+    --ctu-empathic-b: rgba(217, 121, 138, 0.5);
+    --ctu-empathic-h: rgba(217, 121, 138, 0.18);
+    --ctu-empathic-g: rgba(217, 121, 138, 0.2);
+    --ctu-empathic-c: #d9798a;
+    --ctu-logical: rgba(95, 127, 138, 0.12);
+    --ctu-logical-b: rgba(95, 127, 138, 0.5);
+    --ctu-logical-h: rgba(95, 127, 138, 0.18);
+    --ctu-logical-g: rgba(95, 127, 138, 0.2);
+    --ctu-logical-c: #5f7f8a;
+    --ctu-aggressive: rgba(214, 82, 31, 0.12);
+    --ctu-aggressive-b: rgba(214, 82, 31, 0.5);
+    --ctu-aggressive-h: rgba(214, 82, 31, 0.18);
+    --ctu-aggressive-g: rgba(214, 82, 31, 0.2);
+    --ctu-aggressive-c: #d6521f;
+    --ctu-chaotic: rgba(138, 95, 168, 0.12);
+    --ctu-chaotic-b: rgba(138, 95, 168, 0.5);
+    --ctu-chaotic-h: rgba(138, 95, 168, 0.18);
+    --ctu-chaotic-g: rgba(138, 95, 168, 0.2);
+    --ctu-chaotic-c: #8a5fa8;
+}
+
+/* Абсент — зелёная фея в тёмном бокале */
+:root[data-ctu-theme="absinthe"],
+:root[data-ctu-theme="absinthe"] body .ctu-container {
+    --ctu-bg: rgba(230,240,220, 0.06);
+    --ctu-bg-hover: rgba(230,240,220, 0.12);
+    --ctu-bg-solid: rgba(14,24,16,0.93);
+    --ctu-border: rgba(196,232,107, 0.24);
+    --ctu-border-hover: rgba(196,232,107, 0.6);
+    --ctu-text: rgba(230,240,220, 0.93);
+    --ctu-text-muted: rgba(230,240,220, 0.52);
+    --ctu-accent: #c4e86b;
+    --ctu-accent-glow: rgba(196, 232, 107, 0.22);
+    --ctu-accent-rgb: 196, 232, 107;
+    --ctu-alt-rgb: 127, 209, 160;
+    --ctu-fg-rgb: 230,240,220;
+    --ctu-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    --ctu-shadow-hover: 0 12px 32px rgba(0, 0, 0, 0.35);
+    --ctu-radius: 16px;
+    --ctu-radius-sm: 11px;
+    --ctu-blur: blur(22px);
+    --ctu-line: linear-gradient(90deg, transparent, #c4e86b, #7fd1a0, transparent);
+    --ctu-glow: radial-gradient(ellipse at 50% 0%, rgba(196, 232, 107, 0.22), transparent 70%);
+    --ctu-pattern: none;
+    --ctu-pattern-size: auto;
+    --ctu-font: inherit;
+    --ctu-empathic: rgba(166, 227, 184, 0.16);
+    --ctu-empathic-b: rgba(166, 227, 184, 0.5);
+    --ctu-empathic-h: rgba(166, 227, 184, 0.24);
+    --ctu-empathic-g: rgba(166, 227, 184, 0.24);
+    --ctu-empathic-c: #a6e3b8;
+    --ctu-logical: rgba(159, 192, 208, 0.16);
+    --ctu-logical-b: rgba(159, 192, 208, 0.5);
+    --ctu-logical-h: rgba(159, 192, 208, 0.24);
+    --ctu-logical-g: rgba(159, 192, 208, 0.24);
+    --ctu-logical-c: #9fc0d0;
+    --ctu-aggressive: rgba(230, 216, 107, 0.16);
+    --ctu-aggressive-b: rgba(230, 216, 107, 0.5);
+    --ctu-aggressive-h: rgba(230, 216, 107, 0.24);
+    --ctu-aggressive-g: rgba(230, 216, 107, 0.24);
+    --ctu-aggressive-c: #e6d86b;
+    --ctu-chaotic: rgba(200, 166, 230, 0.16);
+    --ctu-chaotic-b: rgba(200, 166, 230, 0.5);
+    --ctu-chaotic-h: rgba(200, 166, 230, 0.24);
+    --ctu-chaotic-g: rgba(200, 166, 230, 0.24);
+    --ctu-chaotic-c: #c8a6e6;
+}
+
+/* Заводь — глубокая бирюза и коралл */
+:root[data-ctu-theme="tidepool"],
+:root[data-ctu-theme="tidepool"] body .ctu-container {
+    --ctu-bg: rgba(223,244,242, 0.06);
+    --ctu-bg-hover: rgba(223,244,242, 0.12);
+    --ctu-bg-solid: rgba(8,32,40,0.92);
+    --ctu-border: rgba(79,209,197, 0.24);
+    --ctu-border-hover: rgba(79,209,197, 0.6);
+    --ctu-text: rgba(223,244,242, 0.93);
+    --ctu-text-muted: rgba(223,244,242, 0.52);
+    --ctu-accent: #ff8a7a;
+    --ctu-accent-glow: rgba(255, 138, 122, 0.22);
+    --ctu-accent-rgb: 255, 138, 122;
+    --ctu-alt-rgb: 79, 209, 197;
+    --ctu-fg-rgb: 223,244,242;
+    --ctu-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    --ctu-shadow-hover: 0 12px 32px rgba(0, 0, 0, 0.35);
+    --ctu-radius: 20px;
+    --ctu-radius-sm: 14px;
+    --ctu-blur: blur(16px);
+    --ctu-line: linear-gradient(90deg, transparent, #4fd1c5, #ff8a7a, #4fd1c5, transparent);
+    --ctu-glow: radial-gradient(ellipse at 50% 0%, rgba(79, 209, 197, 0.2), transparent 70%);
+    --ctu-pattern: repeating-radial-gradient(circle at 85% 125%, rgba(79,209,197,0.08) 0 2px, transparent 2px 22px);
+    --ctu-pattern-size: auto;
+    --ctu-font: inherit;
+    --ctu-empathic: rgba(127, 224, 212, 0.16);
+    --ctu-empathic-b: rgba(127, 224, 212, 0.5);
+    --ctu-empathic-h: rgba(127, 224, 212, 0.24);
+    --ctu-empathic-g: rgba(127, 224, 212, 0.24);
+    --ctu-empathic-c: #7fe0d4;
+    --ctu-logical: rgba(143, 184, 216, 0.16);
+    --ctu-logical-b: rgba(143, 184, 216, 0.5);
+    --ctu-logical-h: rgba(143, 184, 216, 0.24);
+    --ctu-logical-g: rgba(143, 184, 216, 0.24);
+    --ctu-logical-c: #8fb8d8;
+    --ctu-aggressive: rgba(255, 138, 122, 0.16);
+    --ctu-aggressive-b: rgba(255, 138, 122, 0.5);
+    --ctu-aggressive-h: rgba(255, 138, 122, 0.24);
+    --ctu-aggressive-g: rgba(255, 138, 122, 0.24);
+    --ctu-aggressive-c: #ff8a7a;
+    --ctu-chaotic: rgba(240, 166, 216, 0.16);
+    --ctu-chaotic-b: rgba(240, 166, 216, 0.5);
+    --ctu-chaotic-h: rgba(240, 166, 216, 0.24);
+    --ctu-chaotic-g: rgba(240, 166, 216, 0.24);
+    --ctu-chaotic-c: #f0a6d8;
+}
+
+/* ═════════ Настройки: выбор темы и логи ═════════ */
+.ctu-theme-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 8px;
+}
+.ctu-theme-tile {
+    position: relative;
+    border: 1px solid rgba(128, 128, 128, 0.3);
+    border-radius: 10px;
+    padding: 0;
+    overflow: hidden;
+    cursor: pointer;
+    text-align: left;
+    background: rgba(128, 128, 128, 0.08);
+    color: inherit;
+    font: inherit;
+}
+.ctu-theme-tile.active {
+    border-color: var(--ctu-accent);
+    box-shadow: 0 0 0 1px var(--ctu-accent);
+}
+.ctu-theme-swatch {
+    height: 34px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-end;
+    gap: 3px;
+    padding: 4px 6px;
+}
+.ctu-theme-swatch i {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    display: block;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+}
+.ctu-theme-name { font-size: 11px; font-weight: 600; padding: 4px 7px 0; }
+.ctu-theme-hint { font-size: 9px; opacity: 0.55; padding: 0 7px 5px; line-height: 1.25; }
+.ctu-preview.ctu-container { margin: 10px 0 0; animation: none; }
+.ctu-preview .ctu-choice-btn { cursor: default; }
+.ctu-preview .ctu-choice-btn:hover { transform: none; }
+.ctu-log-view {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: ui-monospace, "Courier New", monospace;
+    font-size: 10px;
+    line-height: 1.35;
+    min-height: 220px;
+    resize: vertical;
+    white-space: pre;
+    overflow: auto;
+    background: rgba(0, 0, 0, 0.25);
+    color: inherit;
+    border: 1px solid rgba(128, 128, 128, 0.3);
+    border-radius: 6px;
+    padding: 6px;
+        }
